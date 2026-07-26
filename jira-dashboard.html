@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jira Dashboard</title>
+    <style>
+        :root {
+            --bg: #f4f5f7; --card-bg: #fff; --primary: #0052cc; --primary-hover: #0747a6;
+            --text: #172b4d; --text-muted: #5e6c84; --border: #dfe1e6;
+            --success: #00875a; --warning: #ff991f; --danger: #de350b; --radius: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 4px; }
+        h2 { font-size: 18px; margin-bottom: 12px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+        .header-left p { color: var(--text-muted); font-size: 14px; }
+        .btn { background: var(--primary); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius); cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn:hover { background: var(--primary-hover); }
+        .config-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 24px; display: none; }
+        .config-panel.visible { display: block; }
+        .config-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+        .config-field { display: flex; flex-direction: column; gap: 4px; }
+        .config-field label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+        .config-field input, .config-field select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; min-width: 180px; }
+        .config-field input:focus, .config-field select:focus { outline: none; border-color: var(--primary); }
+        .panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
+        .tab { padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-muted); border-bottom: 2px solid transparent; margin-bottom: -2px; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .summary-card { background: var(--bg); padding: 16px; border-radius: var(--radius); text-align: center; }
+        .summary-card.clickable { cursor: pointer; transition: box-shadow 0.15s, background 0.15s; }
+        .summary-card.clickable:hover { background: #e8edf5; }
+        .summary-card.clickable.active { background: #deebff; box-shadow: 0 0 0 2px var(--primary); }
+        .summary-card .number { font-size: 28px; font-weight: 700; color: var(--primary); }
+        .summary-card .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
+        th:first-child { white-space: nowrap; width: 1%; }
+        td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        td:first-child { white-space: nowrap; width: 1%; }
+        tr:hover td { background: #f8f9fa; }
+        td a { color: var(--primary); text-decoration: none; font-weight: 500; }
+        td a:hover { text-decoration: underline; }
+        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .status-open { background: #deebff; color: #0747a6; }
+        .status-inprogress { background: #fff8e1; color: #856404; }
+        .status-done { background: #e2e2e2; color: #333; }
+        .status-merged { background: #e3fcef; color: #006644; }
+        .status-closed { background: #d4edda; color: #155724; }
+        .status-qeverified { background: #e8d5f5; color: #6b21a8; }
+        .status-other { background: #fff3e0; color: #bf360c; }
+        .priority-p1 { color: var(--danger); font-weight: 700; }
+        .priority-p2 { color: #ff5630; font-weight: 600; }
+        .priority-p3 { color: var(--warning); }
+        .priority-p4 { color: var(--text-muted); }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin-right: 4px; background: #f0f0f0; }
+        .loading { text-align: center; padding: 40px; color: var(--text-muted); }
+        .loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 8px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .error { background: #ffebe6; color: var(--danger); padding: 12px 16px; border-radius: var(--radius); }
+        .empty-state { text-align: center; padding: 32px; color: var(--text-muted); font-style: italic; }
+        .used-query { background: #f8f9fa; border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; color: var(--text-muted); margin-bottom: 16px; word-break: break-all; display: none; }
+        .used-query.visible { display: block; }
+        .used-query .query-label { font-weight: 600; color: var(--text); margin-right: 6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>Jira Dashboard</h1>
+            <p>Run with <code>node jira-proxy.js</code> then open <code>http://localhost:3939</code></p>
+        </div>
+        <button class="btn" onclick="toggleConfig()">Settings</button>
+    </div>
+
+    <div id="configPanel" class="config-panel">
+        <h2>Connection Settings</h2>
+        <div class="config-row">
+            <div class="config-field"><label>Jira Base URL</label><input type="text" id="jiraUrl" value="https://smithmicro.atlassian.net"></div>
+            <div class="config-field"><label>Email</label><input type="email" id="jiraEmail" placeholder="you@company.com"></div>
+            <div class="config-field"><label>API Token</label><input type="password" id="jiraToken" placeholder="Your Jira API token"></div>
+        </div>
+        <div class="config-row">
+            <div class="config-field">
+                <label>Default Project</label>
+                <select id="defaultProject">
+                    <option value="">None</option>
+                    <option value="SPFAM">SPFAM - SafePath Family</option>
+                    <option value="SPC">SPC - SafePath Connect</option>
+                    <option value="SPFMTMOUS">SPFMTMOUS - TMO Family Mode</option>
+                    <option value="SPFSPRUS">SPFSPRUS - TMO Safe &amp; Found</option>
+                    <option value="SPFATT">SPFATT - AT&amp;T Secure Family</option>
+                </select>
+            </div>
+        </div>
+        <div class="config-row">
+            <button class="btn" onclick="saveConfig()">Save &amp; Load</button>
+        </div>
+    </div>
+
+    <div class="config-row" style="margin-bottom: 16px;">
+        <div class="config-field">
+            <label>Project</label>
+            <select id="projectKey">
+                <option value="SPFAM" selected>SPFAM - SafePath Family</option>
+                <option value="SPC">SPC - SafePath Connect</option>
+                <option value="SPFMTMOUS">SPFMTMOUS - TMO Family Mode</option>
+                <option value="SPFSPRUS">SPFSPRUS - TMO Safe & Found</option>
+                <option value="SPFATT">SPFATT - AT&T Secure Family</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('release'); loadProjectVersions()">Tickets by Release</div>
+        <div class="tab" onclick="switchTab('bugs'); loadBugs()">P2 Bugs</div>
+        <div class="tab" onclick="switchTab('open'); loadOpenTickets()">Not Closed</div>
+        <div class="tab" onclick="switchTab('custom')">Custom Query</div>
+    </div>
+    <!-- Tab 1: Stories by Release -->
+    <div id="tab-release" class="tab-content active">
+        <div class="panel">
+            <h2>Tickets by Release</h2>
+            <div class="config-row" style="margin-bottom:16px;">
+                <div class="config-field"><label>Release</label>
+                    <select id="releaseVersion"><option value="">-- Select release --</option></select>
+                </div>
+                <div class="config-field"><label>Issue Type</label>
+                    <select id="releaseIssueType"><option value="Story">Story</option><option value="Bug">Bug</option><option value="">All Types</option></select>
+                </div>
+                <button class="btn" onclick="loadReleaseStories()">Load</button>
+            </div>
+            <div id="releaseQuery" class="used-query"></div>
+            <div id="releaseSummary" class="summary-cards"></div>
+            <div id="releaseResults"></div>
+        </div>
+    </div>
+
+    <!-- Tab 2: P2 Bugs -->
+    <div id="tab-bugs" class="tab-content">
+        <div class="panel">
+            <h2>P2 (Major/High) Bugs</h2>
+            <div class="config-row" style="margin-bottom:16px;">
+                <div class="config-field"><label>Priority</label>
+                    <select id="bugPriority"><option value="Major / High">P2 - Major / High</option><option value="Critical">P1 - Critical</option><option value="Normal / Average">P3 - Normal</option></select>
+                </div>
+                <div class="config-field"><label>Status</label>
+                    <select id="bugStatusFilter"><option value="notClosed">Not Closed</option><option value="all">All</option><option value="open">Open Only</option></select>
+                </div>
+                <button class="btn" onclick="loadBugs()">Load</button>
+            </div>
+            <div id="bugsQuery" class="used-query"></div>
+            <div id="bugsSummary" class="summary-cards"></div>
+            <div id="bugsResults"></div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Not Closed -->
+    <div id="tab-open" class="tab-content">
+        <div class="panel">
+            <h2>Not Closed Tickets</h2>
+            <div class="config-row" style="margin-bottom:16px;">
+                <div class="config-field"><label>Issue Type</label>
+                    <select id="openIssueType"><option value="Story" selected>Story</option><option value="">All</option><option value="Bug">Bug</option></select>
+                </div>
+                <div class="config-field"><label>Fix Version</label>
+                    <select id="openFixVersion"><option value="">All</option></select>
+                </div>
+                <button class="btn" onclick="loadOpenTickets()">Load</button>
+            </div>
+            <div id="openQuery" class="used-query"></div>
+            <div id="openSummary" class="summary-cards"></div>
+            <div id="openResults"></div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Custom Query -->
+    <div id="tab-custom" class="tab-content">
+        <div class="panel">
+            <h2>Custom JQL Query</h2>
+            <div class="config-row" style="margin-bottom:16px;">
+                <div class="config-field" style="flex:1;"><label>JQL</label><input type="text" id="customJql" style="width:100%;min-width:400px;" value="project = SPFAM AND status != Closed ORDER BY updated DESC"></div>
+                <div class="config-field"><label>Max</label><input type="number" id="customMax" value="50" style="min-width:70px;"></div>
+                <button class="btn" onclick="loadCustomQuery()">Run</button>
+            </div>
+            <div id="customQuery" class="used-query"></div>
+            <div id="customSummary" class="summary-cards"></div>
+            <div id="customResults"></div>
+        </div>
+    </div>
+    <script>
+    // --- Config ---
+    function getConfig() {
+        return {
+            url: document.getElementById('jiraUrl').value.replace(/\/$/, ''),
+            email: document.getElementById('jiraEmail').value,
+            token: document.getElementById('jiraToken').value,
+            project: document.getElementById('projectKey').value
+        };
+    }
+    function saveConfig() {
+        const cfg = getConfig();
+        const defaultProject = document.getElementById('defaultProject').value;
+        localStorage.setItem('jiraDashConfig', JSON.stringify({ url: cfg.url, email: cfg.email, token: cfg.token, defaultProject }));
+        applyDefaultProject(defaultProject);
+        toggleConfig();
+        loadReleaseStories();
+    }
+    function loadSavedConfig() {
+        const saved = localStorage.getItem('jiraDashConfig');
+        if (saved) {
+            const cfg = JSON.parse(saved);
+            document.getElementById('jiraUrl').value = cfg.url || '';
+            document.getElementById('jiraEmail').value = cfg.email || '';
+            document.getElementById('jiraToken').value = cfg.token || '';
+            if (cfg.defaultProject) {
+                document.getElementById('defaultProject').value = cfg.defaultProject;
+                applyDefaultProject(cfg.defaultProject);
+            }
+        }
+    }
+    function applyDefaultProject(defaultKey) {
+        if (!defaultKey) return;
+        const select = document.getElementById('projectKey');
+        const options = Array.from(select.options);
+        const target = options.find(o => o.value === defaultKey);
+        if (!target) return;
+        // Move the default option to the top and select it
+        select.removeChild(target);
+        select.insertBefore(target, select.firstChild);
+        select.value = defaultKey;
+    }
+    function toggleConfig() { document.getElementById('configPanel').classList.toggle('visible'); }
+
+    // --- Tabs ---
+    function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('tab-' + name).classList.add('active');
+    }
+    // --- API (using Jira REST API v3 /search/jql endpoint) ---
+    async function jiraSearch(jql, maxResults = 50, startAt = 0) {
+        const cfg = getConfig();
+        if (!cfg.url || !cfg.email || !cfg.token) {
+            throw new Error('Please configure Jira connection in Settings.');
+        }
+        const fields = 'summary,status,priority,assignee,issuetype,fixVersions,labels,created,updated';
+        const params = new URLSearchParams({ jql, maxResults, startAt, fields });
+        const jiraApiUrl = `${cfg.url}/rest/api/3/search/jql?${params.toString()}`;
+
+        // Route through local proxy to avoid CORS
+        const proxyUrl = `/jira-proxy?url=${encodeURIComponent(jiraApiUrl)}`;
+        const resp = await fetch(proxyUrl, {
+            headers: {
+                'Authorization': 'Basic ' + btoa(cfg.email + ':' + cfg.token),
+                'Accept': 'application/json'
+            }
+        });
+        if (!resp.ok) {
+            const err = await resp.text();
+            throw new Error(`Jira API error (${resp.status}): ${err}`);
+        }
+        return await resp.json();
+    }
+
+    async function jiraSearchAll(jql, maxResults = 200) {
+        let all = [];
+        let startAt = 0;
+        const pageSize = 50;
+        let total = 999;
+        while (startAt < total && all.length < maxResults) {
+            const result = await jiraSearch(jql, pageSize, startAt);
+            total = result.total;
+            all = all.concat(result.issues || []);
+            startAt += pageSize;
+        }
+        return { total, issues: all.slice(0, maxResults) };
+    }
+    // --- Rendering ---
+    function getStatusCategory(status) {
+        const s = (status || '').toLowerCase();
+        if (s === 'closed') return 'closed';
+        if (s === 'merged') return 'merged';
+        if (s === 'qe verified') return 'qeverified';
+        if (['open', 'to do', 'new', 'backlog'].includes(s)) return 'open';
+        if (['in progress', 'in review', 'in development', 'in testing'].includes(s)) return 'inprogress';
+        if (['done', 'resolved'].includes(s)) return 'done';
+        return 'other';
+    }
+    function getPriorityClass(p) {
+        p = (p || '').toLowerCase();
+        if (p.includes('critical') || p.includes('blocker')) return 'priority-p1';
+        if (p.includes('major') || p.includes('high')) return 'priority-p2';
+        if (p.includes('normal') || p.includes('average')) return 'priority-p3';
+        return 'priority-p4';
+    }
+    // Per-tab issue cache for summary card filtering
+    const tabIssues = {};
+
+    function renderSummaryCards(summaryId, tableId, issues) {
+        tabIssues[tableId] = issues; // cache full set
+        const map = {};
+        issues.forEach(i => { const s = i.fields.status?.name || '?'; map[s] = (map[s]||0)+1; });
+        document.getElementById(summaryId).innerHTML =
+            `<div class="summary-card clickable active" onclick="filterByStatus('${tableId}', null, this)"><div class="number">${issues.length}</div><div class="label">Total</div></div>` +
+            Object.entries(map).map(([s,c]) => `<div class="summary-card clickable" onclick="filterByStatus('${tableId}', '${s.replace(/'/g,"\\'")}', this)"><div class="number">${c}</div><div class="label">${s}</div></div>`).join('');
+    }
+
+    function filterByStatus(tableId, status, clickedCard) {
+        // Toggle: clicking the already-active card resets to all
+        const isActive = clickedCard.classList.contains('active');
+        const summaryEl = clickedCard.closest('.summary-cards');
+        summaryEl.querySelectorAll('.summary-card').forEach(c => c.classList.remove('active'));
+        if (isActive && status !== null) {
+            // Reset to all
+            summaryEl.querySelector('.summary-card').classList.add('active');
+            renderTable(tableId, tabIssues[tableId]);
+        } else {
+            clickedCard.classList.add('active');
+            const filtered = status === null ? tabIssues[tableId] : tabIssues[tableId].filter(i => (i.fields.status?.name || '?') === status);
+            renderTable(tableId, filtered);
+        }
+    }
+    function renderTable(id, issues) {
+        const cfg = getConfig();
+        if (!issues.length) { document.getElementById(id).innerHTML = '<div class="empty-state">No issues found.</div>'; return; }
+        const rows = issues.map(i => {
+            const f = i.fields;
+            const sc = getStatusCategory(f.status?.name);
+            const pc = getPriorityClass(f.priority?.name);
+            const assignee = f.assignee?.displayName || 'Unassigned';
+            const vers = (f.fixVersions||[]).map(v=>v.name).join(', ');
+            const labels = (f.labels||[]).map(l=>`<span class="tag">${l}</span>`).join('');
+            return `<tr>
+                <td><a href="${cfg.url}/browse/${i.key}" target="_blank">${i.key}</a></td>
+                <td>${f.summary||''}</td>
+                <td><span class="status-badge status-${sc}">${f.status?.name||''}</span></td>
+                <td class="${pc}">${f.priority?.name||''}</td>
+                <td>${f.issuetype?.name||''}</td>
+                <td>${assignee}</td>
+                <td>${vers}</td>
+                <td>${labels}</td>
+            </tr>`;
+        }).join('');
+        document.getElementById(id).innerHTML = `<table><thead><tr><th>Key</th><th>Summary</th><th>Status</th><th>Priority</th><th>Type</th><th>Assignee</th><th>Fix Version</th><th>Labels</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    function showLoading(id) { document.getElementById(id).innerHTML = '<div class="loading">Loading...</div>'; }
+    function showError(id, msg) { document.getElementById(id).innerHTML = `<div class="error">${msg}</div>`; }
+    function showUsedQuery(id, jql) {
+        const el = document.getElementById(id);
+        el.innerHTML = `<span class="query-label">JQL:</span>${jql}`;
+        el.classList.add('visible');
+    }
+    // --- Tab Loaders ---
+    async function loadReleaseStories() {
+        const cfg = getConfig();
+        const release = document.getElementById('releaseVersion').value;
+        const type = document.getElementById('releaseIssueType').value;
+        if (!release) { showError('releaseResults', 'Select a release.'); return; }
+        const fixVersions = releaseMap[release] || [release];
+        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
+
+        // Build version filter: fixVersion + affectedVersion use full names, Planned Release uses x.y / x.y.z directly
+        const fixPart = fixVersions.length ? `fixVersion IN (${versionList})` : null;
+        const affectedPart = fixVersions.length ? `affectedVersion IN (${versionList})` : null;
+
+        // Collect all x.y.z patch numbers that appear in the grouped fix version names,
+        // plus the base x.y key itself, for the Planned Release IN clause
+        const patchNumbers = new Set([release]);
+        fixVersions.forEach(v => {
+            const m = v.match(/(\d+\.\d+\.\d+)/);
+            if (m) patchNumbers.add(m[1]);
+        });
+        // Always include Planned Release — field is customfield_10102, stores plain x.y or x.y.z strings
+        const plannedField = PLANNED_RELEASE_FIELD;
+        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
+        const plannedPart = patchNumbers.size > 1
+            ? `${plannedField} IN (${plannedList})`
+            : `${plannedField} = "${release}"`;
+
+        const parts = [fixPart, affectedPart, plannedPart].filter(Boolean);
+        const versionFilter = parts.length > 1 ? `(${parts.join(' OR ')})` : parts[0] || `fixVersion IN (${versionList})`;
+        let jql = `project = ${cfg.project} AND ${versionFilter}`;
+        if (type === 'Story') {
+            jql += ` AND issuetype IN (Story, "Dev Story")`;
+        } else if (type) {
+            jql += ` AND issuetype = "${type}"`;
+        }
+        jql += ' ORDER BY status ASC, key ASC';
+        showLoading('releaseResults');
+        showUsedQuery('releaseQuery', jql);
+        try { const d = await jiraSearchAll(jql); renderSummaryCards('releaseSummary', 'releaseResults', d.issues); renderTable('releaseResults', d.issues); }
+        catch (e) { showError('releaseResults', e.message); }
+    }
+
+    async function loadBugs() {
+        const cfg = getConfig();
+        const priority = document.getElementById('bugPriority').value;
+        const sf = document.getElementById('bugStatusFilter').value;
+        let jql = `project = ${cfg.project} AND issuetype = Bug AND priority = "${priority}"`;
+        if (sf === 'notClosed') jql += ' AND status != Closed';
+        else if (sf === 'open') jql += ' AND status = Open';
+        jql += ' ORDER BY updated DESC';
+        showLoading('bugsResults');
+        showUsedQuery('bugsQuery', jql);
+        try { const d = await jiraSearchAll(jql); renderSummaryCards('bugsSummary', 'bugsResults', d.issues); renderTable('bugsResults', d.issues); }
+        catch (e) { showError('bugsResults', e.message); }
+    }
+
+    async function loadOpenTickets() {
+        const cfg = getConfig();
+        const type = document.getElementById('openIssueType').value;
+        const fv = document.getElementById('openFixVersion').value;
+        let jql = `project = ${cfg.project} AND status != Closed`;
+        if (type) jql += ` AND issuetype = "${type}"`;
+        if (fv) jql += ` AND fixVersion = "${fv}"`;
+        jql += ' ORDER BY priority ASC, updated DESC';
+        showLoading('openResults');
+        showUsedQuery('openQuery', jql);
+        try { const d = await jiraSearchAll(jql); renderSummaryCards('openSummary', 'openResults', d.issues); renderTable('openResults', d.issues); }
+        catch (e) { showError('openResults', e.message); }
+    }
+
+    async function loadCustomQuery() {
+        const jql = document.getElementById('customJql').value;
+        const max = parseInt(document.getElementById('customMax').value) || 50;
+        if (!jql) { showError('customResults', 'Enter a JQL query.'); return; }
+        showLoading('customResults');
+        showUsedQuery('customQuery', jql);
+        try { const d = await jiraSearchAll(jql, max); renderSummaryCards('customSummary', 'customResults', d.issues); renderTable('customResults', d.issues); }
+        catch (e) { showError('customResults', e.message); }
+    }
+
+    // --- Init ---
+    loadSavedConfig();
+
+    // --- Fetch project versions ---
+    let releaseMap = {}; // { "8.4": ["Android 8.4.0", "iOS 8.4.1", ...] }
+    // Planned Release field ID (customfield_10102) stores plain x.y strings
+    const PLANNED_RELEASE_FIELD = 'customfield_10102';
+    let plannedReleaseValues = new Set();
+
+    function extractReleaseKey(versionName) {
+        // Extract just the x.y or x.y.z version number from any version name
+        // "Android 8.4.0" → "8.4", "iOS 8.4.1" → "8.4", "1.2.0 RC#2" → "1.2", "1.1.2 Patch Release" → "1.1.2"
+        // For patch releases (x.y.z where z != 0), keep the z to avoid merging patches into minor
+        const m = versionName.match(/(\d+)\.(\d+)\.(\d+)/);
+        if (m) {
+            // If patch is 0, group by x.y; if patch is non-zero, keep x.y.z as its own group
+            return parseInt(m[3]) === 0 ? `${m[1]}.${m[2]}` : `${m[1]}.${m[2]}.${m[3]}`;
+        }
+        // x.y only
+        const m2 = versionName.match(/(\d+\.\d+)/);
+        if (m2) return m2[1];
+        return versionName;
+    }
+
+    async function jiraGet(apiPath) {
+        const cfg = getConfig();
+        const jiraApiUrl = `${cfg.url}${apiPath}`;
+        const proxyUrl = `/jira-proxy?url=${encodeURIComponent(jiraApiUrl)}`;
+        const resp = await fetch(proxyUrl, {
+            headers: {
+                'Authorization': 'Basic ' + btoa(cfg.email + ':' + cfg.token),
+                'Accept': 'application/json'
+            }
+        });
+        if (!resp.ok) throw new Error(`API error ${resp.status}`);
+        return resp.json();
+    }
+
+    async function fetchPlannedReleaseField() {
+        // Field ID is hardcoded as customfield_10102 — no dynamic lookup needed
+    }
+
+    async function loadProjectVersions() {
+        const cfg = getConfig();
+        if (!cfg.url || !cfg.email || !cfg.token) return;
+        const project = cfg.project;
+
+        const versions = await jiraGet(`/rest/api/3/project/${project}/versions`).catch(() => []);
+
+        // Build release groups: x.y.z → grouped under x.y
+        releaseMap = {};
+        const releaseReleased = {};
+        versions.forEach(v => {
+            const key = extractReleaseKey(v.name);
+            if (!releaseMap[key]) { releaseMap[key] = []; releaseReleased[key] = true; }
+            releaseMap[key].push(v.name);
+            if (!v.released) releaseReleased[key] = false;
+        });
+
+        // Also add any Planned Release x.y values not already covered by fix versions
+        plannedReleaseValues.forEach(pr => {
+            if (!releaseMap[pr]) { releaseMap[pr] = []; releaseReleased[pr] = false; }
+        });
+
+        // Sort release keys: unreleased first, then descending by version number
+        const sortedKeys = Object.keys(releaseMap).sort((a, b) => {
+            const aRel = releaseReleased[a];
+            const bRel = releaseReleased[b];
+            if (aRel !== bRel) return aRel ? 1 : -1;
+            // Natural version sort
+            const aParts = a.match(/(\d+)\.(\d+)/);
+            const bParts = b.match(/(\d+)\.(\d+)/);
+            if (aParts && bParts) {
+                const diff = parseInt(bParts[1]) - parseInt(aParts[1]) || parseInt(bParts[2]) - parseInt(aParts[2]);
+                if (diff !== 0) return diff;
+            }
+            return b.localeCompare(a);
+        });
+
+        populateReleaseDropdown('releaseVersion', sortedKeys, releaseReleased, false);
+        populateVersionDropdown('openFixVersion', versions, true);
+    }
+
+    function populateReleaseDropdown(selectId, sortedKeys, releaseReleased, includeAll) {
+        const select = document.getElementById(selectId);
+        const currentValue = select.value;
+        select.innerHTML = includeAll ? '<option value="">All</option>' : '<option value="">-- Select release --</option>';
+        sortedKeys.forEach(key => {
+            const label = releaseReleased[key] ? `RC ${key} (released)` : `RC ${key}`;
+            select.innerHTML += `<option value="${key}">${label}</option>`;
+        });
+        if (currentValue) select.value = currentValue;
+    }
+
+    function populateVersionDropdown(selectId, versions, includeAll) {
+        const select = document.getElementById(selectId);
+        const currentValue = select.value;
+        select.innerHTML = includeAll ? '<option value="">All</option>' : '<option value="">-- Select version --</option>';
+        // Sort: unreleased first, then descending
+        const sorted = [...versions].sort((a, b) => {
+            if (a.released === b.released) return (b.name || '').localeCompare(a.name || '');
+            return a.released ? 1 : -1;
+        });
+        sorted.forEach(v => {
+            const label = v.released ? `${v.name} (released)` : v.name;
+            select.innerHTML += `<option value="${v.name}">${label}</option>`;
+        });
+        if (currentValue) select.value = currentValue;
+    }
+
+    // Reload versions when project changes
+    document.getElementById('projectKey').addEventListener('change', loadProjectVersions);
+
+    // Initial load of versions
+    loadProjectVersions();
+    </script>
+</body>
+</html>
