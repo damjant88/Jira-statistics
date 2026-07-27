@@ -68,6 +68,28 @@
         .used-query { background: #f8f9fa; border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; color: var(--text-muted); margin-bottom: 16px; word-break: break-all; display: none; }
         .used-query.visible { display: block; }
         .used-query .query-label { font-weight: 600; color: var(--text); margin-right: 6px; }
+        /* --- Metrics --- */
+        .metric-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
+        .metric-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; position: relative; overflow: hidden; }
+        .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--primary); }
+        .metric-card.danger::before { background: var(--danger); }
+        .metric-card.warning::before { background: var(--warning); }
+        .metric-card.success::before { background: var(--success); }
+        .metric-card .metric-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 8px; }
+        .metric-card .metric-value { font-size: 36px; font-weight: 800; color: var(--text); line-height: 1; margin-bottom: 4px; }
+        .metric-card.danger .metric-value { color: var(--danger); }
+        .metric-card.warning .metric-value { color: var(--warning); }
+        .metric-card.success .metric-value { color: var(--success); }
+        .metric-card .metric-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+        .metric-card .metric-desc { font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+        .metric-loading { text-align: center; padding: 20px; color: var(--text-muted); font-style: italic; }
+        .metric-section { margin-bottom: 28px; }
+        .metric-section h3 { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+        .metric-bar-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .metric-bar-label { font-size: 12px; color: var(--text-muted); width: 120px; flex-shrink: 0; }
+        .metric-bar { height: 16px; border-radius: 8px; background: var(--danger); min-width: 4px; transition: width 0.4s; }
+        .metric-bar.safe { background: var(--success); }
+        .metric-bar-pct { font-size: 12px; font-weight: 600; color: var(--text); }
     </style>
 </head>
 <body>
@@ -107,13 +129,16 @@
     <div class="config-row" style="margin-bottom: 16px;">
         <div class="config-field">
             <label>Project</label>
-            <select id="projectKey">
-                <option value="SPFAM" selected>SPFAM - SafePath Family</option>
-                <option value="SPC">SPC - SafePath Connect</option>
-                <option value="SPFMTMOUS">SPFMTMOUS - TMO Family Mode</option>
-                <option value="SPFSPRUS">SPFSPRUS - TMO Safe & Found</option>
-                <option value="SPFATT">SPFATT - AT&T Secure Family</option>
-            </select>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <img id="projectAvatar" src="" alt="" style="width:28px;height:28px;border-radius:4px;display:none;">
+                <select id="projectKey">
+                    <option value="SPFAM" selected>SPFAM - SafePath Family</option>
+                    <option value="SPC">SPC - SafePath Connect</option>
+                    <option value="SPFMTMOUS">SPFMTMOUS - TMO Family Mode</option>
+                    <option value="SPFSPRUS">SPFSPRUS - TMO Safe & Found</option>
+                    <option value="SPFATT">SPFATT - AT&T Secure Family</option>
+                </select>
+            </div>
         </div>
     </div>
 
@@ -122,6 +147,7 @@
         <div class="tab" onclick="switchTab('bugs'); loadBugs()">P2 Bugs</div>
         <div class="tab" onclick="switchTab('open'); loadOpenTickets()">Not Closed</div>
         <div class="tab" onclick="switchTab('custom')">Custom Query</div>
+        <div class="tab" onclick="switchTab('metrics'); syncMetricsRelease(); loadMetrics()">Metrics</div>
     </div>
     <!-- Tab 1: Stories by Release -->
     <div id="tab-release" class="tab-content active">
@@ -192,6 +218,25 @@
             <div id="customQuery" class="used-query"></div>
             <div id="customSummary" class="summary-cards"></div>
             <div id="customResults"></div>
+        </div>
+    </div>
+    <!-- Tab 5: Metrics -->
+    <div id="tab-metrics" class="tab-content">
+        <div class="panel">
+            <h2>QA Metrics</h2>
+            <div class="config-row" style="margin-bottom: 20px;">
+                <div class="config-field">
+                    <label>Release</label>
+                    <select id="metricsRelease"><option value="">-- Select release --</option></select>
+                </div>
+                <button class="btn" onclick="loadMetrics()">Calculate</button>
+            </div>
+
+            <!-- Metric cards row -->
+            <div id="metricCards" class="metric-cards"></div>
+
+            <!-- Defect Leakage drilldown -->
+            <div id="metricSections"></div>
         </div>
     </div>
     <script>
@@ -288,8 +333,8 @@
         const s = (status || '').toLowerCase();
         if (s === 'closed') return 'closed';
         if (s === 'merged') return 'merged';
-        if (s === 'qe verified') return 'qeverified';
-        if (['open', 'to do', 'new', 'backlog'].includes(s)) return 'open';
+        if (s === 'qe verified' || s === 'qe verif​ied') return 'qeverified';
+        if (['open', 'to do', 'new', 'backlog', 'ready'].includes(s)) return 'open';
         if (['in progress', 'in review', 'in development', 'in testing'].includes(s)) return 'inprogress';
         if (['done', 'resolved'].includes(s)) return 'done';
         return 'other';
@@ -364,6 +409,7 @@
         const release = document.getElementById('releaseVersion').value;
         const type = document.getElementById('releaseIssueType').value;
         if (!release) { showError('releaseResults', 'Select a release.'); return; }
+        saveReleaseFilter();
         const fixVersions = releaseMap[release] || [release];
         const versionList = fixVersions.map(v => `"${v}"`).join(', ');
 
@@ -438,8 +484,18 @@
         catch (e) { showError('customResults', e.message); }
     }
 
-    // --- Init ---
-    loadSavedConfig();
+    function saveReleaseFilter() {
+        localStorage.setItem('jiraReleaseFilter', JSON.stringify({
+            version: document.getElementById('releaseVersion').value,
+            issueType: document.getElementById('releaseIssueType').value,
+            project: document.getElementById('projectKey').value
+        }));
+    }
+    function restoreReleaseFilter() {
+        const saved = localStorage.getItem('jiraReleaseFilter');
+        if (!saved) return null;
+        return JSON.parse(saved);
+    }
 
     // --- Fetch project versions ---
     let releaseMap = {}; // { "8.4": ["Android 8.4.0", "iOS 8.4.1", ...] }
@@ -519,6 +575,23 @@
 
         populateReleaseDropdown('releaseVersion', sortedKeys, releaseReleased, false);
         populateVersionDropdown('openFixVersion', versions, true);
+        syncMetricsRelease();
+
+        // Restore last used release filter and auto-load if this is the first load
+        const saved = restoreReleaseFilter();
+        if (saved) {
+            // Switch to saved project if it matches current
+            if (saved.project && saved.project === getConfig().project) {
+                if (saved.issueType !== undefined) document.getElementById('releaseIssueType').value = saved.issueType;
+                if (saved.version) {
+                    document.getElementById('releaseVersion').value = saved.version;
+                    // Auto-load only on initial page load (table is empty)
+                    if (!document.getElementById('releaseResults').innerHTML.trim()) {
+                        loadReleaseStories();
+                    }
+                }
+            }
+        }
     }
 
     function populateReleaseDropdown(selectId, sortedKeys, releaseReleased, includeAll) {
@@ -548,8 +621,183 @@
         if (currentValue) select.value = currentValue;
     }
 
+    // --- Project avatars ---
+    const projectAvatars = {
+        'SPFAM':     'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10666',
+        'SPC':       'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10765',
+        'SPFMTMOUS': 'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10663',
+        'SPFSPRUS':  'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10669',
+        'SPFATT':    'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10725'
+    };
+
+    function updateProjectAvatar() {
+        const key = document.getElementById('projectKey').value;
+        const img = document.getElementById('projectAvatar');
+        const cfg = getConfig();
+        const url = projectAvatars[key];
+        if (url && cfg.email && cfg.token) {
+            img.src = `/jira-proxy?url=${encodeURIComponent(url)}`;
+            img.style.display = 'block';
+            img.onerror = () => { img.style.display = 'none'; };
+        } else {
+            img.style.display = 'none';
+        }
+    }
+
+    // --- Init ---
+    loadSavedConfig();
+    updateProjectAvatar();
+
     // Reload versions when project changes
-    document.getElementById('projectKey').addEventListener('change', loadProjectVersions);
+    document.getElementById('projectKey').addEventListener('change', () => {
+        loadProjectVersions();
+        updateProjectAvatar();
+    });
+
+    // --- Metrics ---
+    function syncMetricsRelease() {
+        const src = document.getElementById('releaseVersion');
+        const dst = document.getElementById('metricsRelease');
+        const current = dst.value;
+        dst.innerHTML = src.innerHTML; // mirror the same options
+        if (current) dst.value = current;
+        else dst.value = src.value; // default to whatever release tab has selected
+    }
+
+    async function loadMetrics() {
+        const cfg = getConfig();
+        const release = document.getElementById('metricsRelease').value;
+        if (!release) {
+            document.getElementById('metricCards').innerHTML = '<div class="metric-loading">Select a release to calculate metrics.</div>';
+            document.getElementById('metricSections').innerHTML = '';
+            return;
+        }
+
+        document.getElementById('metricCards').innerHTML = '<div class="metric-loading">Calculating...</div>';
+        document.getElementById('metricSections').innerHTML = '';
+
+        const fixVersions = releaseMap[release] || [release];
+        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
+        const patchNumbers = new Set([release]);
+        fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
+        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+        const baseJql = `project = ${cfg.project} AND ${versionFilter}`;
+
+        try {
+            // Run queries in parallel
+            const [allBugs, prodBugs, allStories] = await Promise.all([
+                jiraSearchAll(`${baseJql} AND issuetype = Bug`, 500),
+                jiraSearchAll(`${baseJql} AND issuetype = Bug AND labels = Production_Issue`, 500),
+                jiraSearchAll(`${baseJql} AND issuetype IN (Story, "Dev Story")`, 500)
+            ]);
+
+            const totalBugs = allBugs.issues.length;
+            const totalProdBugs = prodBugs.issues.length;
+            const totalStories = allStories.issues.length;
+            const leakagePct = totalBugs > 0 ? Math.round((totalProdBugs / totalBugs) * 100) : 0;
+            const leakageColor = leakagePct === 0 ? 'success' : leakagePct <= 20 ? 'warning' : 'danger';
+            const releasedLabel = 'label = Production_Issue';
+
+            // --- Metric cards ---
+            document.getElementById('metricCards').innerHTML = `
+                <div class="metric-card ${leakageColor}">
+                    <div class="metric-title">Defect Leakage Rate</div>
+                    <div class="metric-value">${leakagePct}%</div>
+                    <div class="metric-sub">${totalProdBugs} production bugs out of ${totalBugs} total</div>
+                    <div class="metric-desc">Bugs found in production (label: Production_Issue) vs all bugs for RC ${release}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Total Bugs</div>
+                    <div class="metric-value">${totalBugs}</div>
+                    <div class="metric-sub">All bugs for RC ${release}</div>
+                    <div class="metric-desc">Includes open, in progress, merged, and closed bugs</div>
+                </div>
+                <div class="metric-card ${totalProdBugs > 0 ? 'danger' : 'success'}">
+                    <div class="metric-title">Production Bugs</div>
+                    <div class="metric-value">${totalProdBugs}</div>
+                    <div class="metric-sub">label = Production_Issue</div>
+                    <div class="metric-desc">Bugs that escaped to production and were labelled accordingly</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Stories</div>
+                    <div class="metric-value">${totalStories}</div>
+                    <div class="metric-sub">Story + Dev Story for RC ${release}</div>
+                    <div class="metric-desc">Total stories delivered in this release</div>
+                </div>
+            `;
+                <div class="metric-card">
+                    <div class="metric-title">Stories</div>
+                    <div class="metric-value">${totalStories}</div>
+                    <div class="metric-sub">Story + Dev Story for RC ${release}</div>
+                    <div class="metric-desc">Total stories delivered in this release</div>
+                </div>
+            `;
+
+            // --- Sections ---
+            let sectionsHtml = '';
+
+            // Defect leakage breakdown by priority
+            if (totalProdBugs > 0) {
+                const prioMap = {};
+                prodBugs.issues.forEach(i => {
+                    const p = i.fields.priority?.name || 'Unknown';
+                    prioMap[p] = (prioMap[p] || 0) + 1;
+                });
+                const bars = Object.entries(prioMap).sort((a,b) => b[1]-a[1]).map(([p,c]) => {
+                    const pct = Math.round((c / totalProdBugs) * 100);
+                    const barW = Math.max(4, Math.round((c / totalProdBugs) * 300));
+                    return `<div class="metric-bar-wrap">
+                        <div class="metric-bar-label">${p}</div>
+                        <div class="metric-bar" style="width:${barW}px"></div>
+                        <div class="metric-bar-pct">${c} (${pct}%)</div>
+                    </div>`;
+                }).join('');
+
+                sectionsHtml += `
+                    <div class="metric-section">
+                        <h3>Production Bugs by Priority</h3>
+                        ${bars}
+                    </div>`;
+
+                // Production bugs table
+                sectionsHtml += `
+                    <div class="metric-section">
+                        <h3>Production Bug List</h3>
+                        ${renderTableHtml(prodBugs.issues)}
+                    </div>`;
+            }
+
+            document.getElementById('metricSections').innerHTML = sectionsHtml;
+
+        } catch(e) {
+            document.getElementById('metricCards').innerHTML = `<div class="error">${e.message}</div>`;
+        }
+    }
+
+    // Renders table HTML without writing to DOM (used by metrics)
+    function renderTableHtml(issues) {
+        const cfg = getConfig();
+        if (!issues.length) return '<div class="empty-state">No issues found.</div>';
+        const rows = issues.map(i => {
+            const f = i.fields;
+            const sc = getStatusCategory(f.status?.name);
+            const pc = getPriorityClass(f.priority?.name);
+            const assignee = f.assignee?.displayName || 'Unassigned';
+            const vers = (f.fixVersions||[]).map(v=>v.name).join(', ');
+            const labels = (f.labels||[]).map(l=>`<span class="tag">${l}</span>`).join('');
+            return `<tr>
+                <td><a href="${cfg.url}/browse/${i.key}" target="_blank">${i.key}</a></td>
+                <td>${f.summary||''}</td>
+                <td><span class="status-badge status-${sc}">${f.status?.name||''}</span></td>
+                <td class="${pc}">${f.priority?.name||''}</td>
+                <td>${assignee}</td>
+                <td>${vers}</td>
+                <td>${labels}</td>
+            </tr>`;
+        }).join('');
+        return `<table><thead><tr><th>Key</th><th>Summary</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Fix Version</th><th>Labels</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
 
     // Initial load of versions
     loadProjectVersions();
