@@ -18,6 +18,10 @@
         .header-left p { color: var(--text-muted); font-size: 14px; }
         .btn { background: var(--primary); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius); cursor: pointer; font-size: 14px; font-weight: 500; }
         .btn:hover { background: var(--primary-hover); }
+        .btn-sm { padding: 6px 12px; font-size: 13px; }
+        .btn-danger { background: var(--danger); }
+        .btn-danger:hover { background: #b02a22; }
+        .release-date-badge { display: inline-block; font-size: 11px; font-weight: 600; color: var(--primary); background: #deebff; border-radius: 3px; padding: 1px 6px; margin-left: 4px; }
         .config-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 24px; display: none; }
         .config-panel.visible { display: block; }
         .config-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
@@ -37,6 +41,10 @@
         .summary-card.clickable { cursor: pointer; transition: box-shadow 0.15s, background 0.15s; }
         .summary-card.clickable:hover { background: #e8edf5; }
         .summary-card.clickable.active { background: #deebff; box-shadow: 0 0 0 2px var(--primary); }
+        .summary-card.next-rc { background: #fff3e0; border: 1px solid #ffcc80; }
+        .summary-card.next-rc .number { color: #e65100; }
+        .summary-card.next-rc .label { color: #e65100; font-weight: 700; }
+        .summary-card.next-rc.active { background: #ffe0b2; box-shadow: 0 0 0 2px #e65100; }
         .summary-card .number { font-size: 28px; font-weight: 700; color: var(--primary); }
         .summary-card .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -126,7 +134,7 @@
         </div>
     </div>
 
-    <div class="config-row" style="margin-bottom: 16px;">
+    <div class="config-row" style="margin-bottom: 16px; align-items: flex-end; flex-wrap: wrap; gap: 16px;">
         <div class="config-field">
             <label>Project</label>
             <div style="display:flex; align-items:center; gap:10px;">
@@ -138,6 +146,25 @@
                     <option value="SPFSPRUS">SPFSPRUS - TMO Safe & Found</option>
                     <option value="SPFATT">SPFATT - AT&T Secure Family</option>
                 </select>
+            </div>
+        </div>
+        <div class="config-field release-manager">
+            <label>Release Date</label>
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <select id="releaseDatePicker" style="min-width:160px;"><option value="">-- Select RC --</option></select>
+                <input type="datetime-local" id="releaseDateInput" style="min-width:190px; padding:8px 12px; border:1px solid var(--border); border-radius:4px; font-size:14px;">
+                <button class="btn btn-sm" onclick="saveReleaseDate()">Set Date</button>
+                <button class="btn btn-sm btn-danger" onclick="clearReleaseDate()" title="Clear date for selected RC">✕</button>
+            </div>
+        </div>
+        <div class="config-field" style="flex:1; min-width:300px;">
+            <label style="display:flex; align-items:center; gap:8px;">
+                Assigned to me
+                <span id="assignedMeCount" style="font-size:11px; font-weight:700; background:#deebff; color:#0052cc; border-radius:3px; padding:1px 7px; display:none;"></span>
+                <button class="btn btn-sm" onclick="loadAssignedToMe()" style="margin-left:auto;">Refresh</button>
+            </label>
+            <div id="assignedMeResults" style="max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); font-size:12px;">
+                <div class="empty-state" style="padding:16px;">Click Refresh to load</div>
             </div>
         </div>
     </div>
@@ -195,8 +222,8 @@
                 <div class="config-field"><label>Issue Type</label>
                     <select id="openIssueType"><option value="Story" selected>Story</option><option value="">All</option><option value="Bug">Bug</option></select>
                 </div>
-                <div class="config-field"><label>Fix Version</label>
-                    <select id="openFixVersion"><option value="">All</option></select>
+                <div class="config-field"><label>Release</label>
+                    <select id="openRelease"><option value="">All</option></select>
                 </div>
                 <button class="btn" onclick="loadOpenTickets()">Load</button>
             </div>
@@ -289,6 +316,7 @@
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         event.target.classList.add('active');
         document.getElementById('tab-' + name).classList.add('active');
+        localStorage.setItem('jiraActiveTab', name);
     }
     // --- API (using Jira REST API v3 /search/jql endpoint) ---
     async function jiraSearch(jql, maxResults = 50, startAt = 0) {
@@ -348,30 +376,109 @@
     }
     // Per-tab issue cache for summary card filtering
     const tabIssues = {};
+    const tabBaseJql = {}; // stores the full JQL used to load each tab
 
     function renderSummaryCards(summaryId, tableId, issues) {
         tabIssues[tableId] = issues; // cache full set
         const map = {};
         issues.forEach(i => { const s = i.fields.status?.name || '?'; map[s] = (map[s]||0)+1; });
+
+        // NextRC card: computed async from changelog — show placeholder, fill in when ready
+        let nextRcCard = '';
+        if (tableId === 'releaseResults') {
+            const cfg = getConfig();
+            const releaseKey = document.getElementById('releaseVersion').value;
+            const releaseDate = getReleaseDateKey(cfg.project, releaseKey);
+            if (releaseDate) {
+                nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="QE Verified→Merged after ${releaseDate}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
+                // Compute async after render
+                computeNextRc(issues, releaseDate, tableId);
+            }
+        }
+
         document.getElementById(summaryId).innerHTML =
             `<div class="summary-card clickable active" onclick="filterByStatus('${tableId}', null, this)"><div class="number">${issues.length}</div><div class="label">Total</div></div>` +
-            Object.entries(map).map(([s,c]) => `<div class="summary-card clickable" onclick="filterByStatus('${tableId}', '${s.replace(/'/g,"\\'")}', this)"><div class="number">${c}</div><div class="label">${s}</div></div>`).join('');
+            Object.entries(map).map(([s,c]) => `<div class="summary-card clickable" onclick="filterByStatus('${tableId}', '${s.replace(/'/g,"\\'")}', this)"><div class="number">${c}</div><div class="label">${s}</div></div>`).join('') +
+            nextRcCard;
+    }
+
+    async function computeNextRc(issues, releaseDate, tableId) {
+        const cfg = getConfig();
+        const releaseKey = document.getElementById('releaseVersion').value;
+        const fixVersions = releaseMap[releaseKey] || [releaseKey];
+        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
+        const patchNumbers = new Set([releaseKey]);
+        fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
+        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+
+        // Format datetime for JQL: "2026-07-25 14:30" (JQL uses yyyy-MM-dd HH:mm)
+        const jqlDate = releaseDate.replace('T', ' ');
+
+        // JQL status change clause — Jira evaluates this precisely against the changelog
+        const jql = `project = ${cfg.project} AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}"`;
+        tabBaseJql['nextRc'] = jql;
+
+        try {
+            const d = await jiraSearchAll(jql, 500);
+            tabIssues['nextRc'] = d.issues;
+            const countEl = document.getElementById('nextRcCount');
+            const card = document.getElementById('nextRcCard');
+            if (countEl) countEl.textContent = d.issues.length;
+            if (card) {
+                card.classList.add('clickable');
+                card.setAttribute('onclick', `filterByStatus('${tableId}', '__nextRc__', this)`);
+            }
+        } catch(e) {
+            const countEl = document.getElementById('nextRcCount');
+            if (countEl) countEl.textContent = '?';
+        }
     }
 
     function filterByStatus(tableId, status, clickedCard) {
-        // Toggle: clicking the already-active card resets to all
         const isActive = clickedCard.classList.contains('active');
         const summaryEl = clickedCard.closest('.summary-cards');
         summaryEl.querySelectorAll('.summary-card').forEach(c => c.classList.remove('active'));
         if (isActive && status !== null) {
-            // Reset to all
             summaryEl.querySelector('.summary-card').classList.add('active');
             renderTable(tableId, tabIssues[tableId]);
+            updateFilteredJql(tableId, null, null);
         } else {
             clickedCard.classList.add('active');
-            const filtered = status === null ? tabIssues[tableId] : tabIssues[tableId].filter(i => (i.fields.status?.name || '?') === status);
+            let filtered;
+            let filterLabel = null;
+            if (status === null) {
+                filtered = tabIssues[tableId];
+            } else if (status === '__nextRc__') {
+                filtered = tabIssues['nextRc'] || [];
+                filterLabel = { type: 'nextRc' };
+            } else {
+                filtered = tabIssues[tableId].filter(i => (i.fields.status?.name || '?') === status);
+                filterLabel = { type: 'status', value: status };
+            }
             renderTable(tableId, filtered);
+            updateFilteredJql(tableId, filterLabel, clickedCard);
         }
+    }
+
+    function updateFilteredJql(tableId, filter, clickedCard) {
+        // Only applies to release tab for now
+        const queryElId = tableId === 'releaseResults' ? 'releaseQuery' : null;
+        if (!queryElId) return;
+        const baseJql = tabBaseJql[tableId];
+        if (!baseJql) return;
+
+        let jql;
+        if (!filter) {
+            jql = baseJql;
+        } else if (filter.type === 'status') {
+            jql = `${baseJql} AND status = "${filter.value}"`;
+        } else if (filter.type === 'nextRc') {
+            // Use the stored nextRc JQL from computeNextRc
+            jql = tabBaseJql['nextRc'] || baseJql;
+        }
+
+        showUsedQuery(queryElId, jql);
     }
     function renderTable(id, issues) {
         const cfg = getConfig();
@@ -400,8 +507,16 @@
     function showError(id, msg) { document.getElementById(id).innerHTML = `<div class="error">${msg}</div>`; }
     function showUsedQuery(id, jql) {
         const el = document.getElementById(id);
-        el.innerHTML = `<span class="query-label">JQL:</span>${jql}`;
+        el.innerHTML = `<span class="query-label">JQL:</span><span id="${id}-text">${jql}</span><button onclick="copyJql('${id}-text')" style="margin-left:10px;padding:2px 8px;font-size:11px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:#fff;">Copy</button>`;
         el.classList.add('visible');
+    }
+
+    function copyJql(spanId) {
+        const text = document.getElementById(spanId)?.textContent || '';
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById(spanId)?.nextElementSibling;
+            if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); }
+        });
     }
     // --- Tab Loaders ---
     async function loadReleaseStories() {
@@ -442,6 +557,7 @@
         jql += ' ORDER BY status ASC, key ASC';
         showLoading('releaseResults');
         showUsedQuery('releaseQuery', jql);
+        tabBaseJql['releaseResults'] = jql;
         try { const d = await jiraSearchAll(jql); renderSummaryCards('releaseSummary', 'releaseResults', d.issues); renderTable('releaseResults', d.issues); }
         catch (e) { showError('releaseResults', e.message); }
     }
@@ -463,10 +579,19 @@
     async function loadOpenTickets() {
         const cfg = getConfig();
         const type = document.getElementById('openIssueType').value;
-        const fv = document.getElementById('openFixVersion').value;
+        const release = document.getElementById('openRelease').value;
         let jql = `project = ${cfg.project} AND status != Closed`;
         if (type) jql += ` AND issuetype = "${type}"`;
-        if (fv) jql += ` AND fixVersion = "${fv}"`;
+        if (release) {
+            const fixVersions = releaseMap[release] || [release];
+            const versionList = fixVersions.map(v => `"${v}"`).join(', ');
+            const patchNumbers = new Set([release]);
+            fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
+            const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
+            const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+            jql += ` AND ${versionFilter}`;
+            localStorage.setItem('jiraOpenRelease', release);
+        }
         jql += ' ORDER BY priority ASC, updated DESC';
         showLoading('openResults');
         showUsedQuery('openQuery', jql);
@@ -574,22 +699,58 @@
         });
 
         populateReleaseDropdown('releaseVersion', sortedKeys, releaseReleased, false);
-        populateVersionDropdown('openFixVersion', versions, true);
+        populateReleaseDropdown('openRelease', sortedKeys, releaseReleased, true);
         syncMetricsRelease();
+        syncReleaseDatePicker();
+
+        // Restore saved open release selection
+        const savedOpenRelease = localStorage.getItem('jiraOpenRelease');
+        if (savedOpenRelease) document.getElementById('openRelease').value = savedOpenRelease;
 
         // Restore last used release filter and auto-load if this is the first load
         const saved = restoreReleaseFilter();
         if (saved) {
-            // Switch to saved project if it matches current
             if (saved.project && saved.project === getConfig().project) {
                 if (saved.issueType !== undefined) document.getElementById('releaseIssueType').value = saved.issueType;
                 if (saved.version) {
                     document.getElementById('releaseVersion').value = saved.version;
-                    // Auto-load only on initial page load (table is empty)
                     if (!document.getElementById('releaseResults').innerHTML.trim()) {
                         loadReleaseStories();
                     }
                 }
+            }
+        }
+
+        // Restore active tab and trigger its loader (only on first load)
+        const activeTab = localStorage.getItem('jiraActiveTab') || 'release';
+        if (document.getElementById('tab-' + activeTab) && !document.querySelector('#tab-' + activeTab + ' .loading')) {
+            // Activate the tab visually
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-' + activeTab).classList.add('active');
+            // Find the tab button and activate it
+            document.querySelectorAll('.tab').forEach(t => {
+                if (t.getAttribute('onclick') && t.getAttribute('onclick').includes("'" + activeTab + "'")) {
+                    t.classList.add('active');
+                }
+            });
+            // Trigger the loader for the restored tab (only once on page load)
+            if (!window._tabRestored) {
+                window._tabRestored = true;
+                if (activeTab === 'release') {
+                    const saved = restoreReleaseFilter();
+                    if (saved && saved.project === getConfig().project) {
+                        if (saved.issueType !== undefined) document.getElementById('releaseIssueType').value = saved.issueType;
+                        if (saved.version) {
+                            document.getElementById('releaseVersion').value = saved.version;
+                            loadReleaseStories();
+                        }
+                    }
+                }
+                else if (activeTab === 'bugs') loadBugs();
+                else if (activeTab === 'open') loadOpenTickets();
+                else if (activeTab === 'metrics') { syncMetricsRelease(); loadMetrics(); }
+                // custom tab has no auto-loader
             }
         }
     }
@@ -621,6 +782,101 @@
         if (currentValue) select.value = currentValue;
     }
 
+    // --- Release Dates ---
+    // Stored as { "SPC:1.2": "2026-08-01", "SPC:1.1": "2026-06-15", ... }
+    let releaseDates = {};
+
+    function loadReleaseDates() {
+        const saved = localStorage.getItem('jiraReleaseDates');
+        releaseDates = saved ? JSON.parse(saved) : {};
+    }
+
+    function saveReleaseDate() {
+        const rc = document.getElementById('releaseDatePicker').value;
+        const date = document.getElementById('releaseDateInput').value;
+        if (!rc) { alert('Select a release first.'); return; }
+        if (!date) { alert('Pick a date first.'); return; }
+        const key = `${getConfig().project}:${rc}`;
+        releaseDates[key] = date;
+        localStorage.setItem('jiraReleaseDates', JSON.stringify(releaseDates));
+        syncReleaseDatePicker(); // refresh badges
+    }
+
+    function clearReleaseDate() {
+        const rc = document.getElementById('releaseDatePicker').value;
+        if (!rc) return;
+        const key = `${getConfig().project}:${rc}`;
+        delete releaseDates[key];
+        localStorage.setItem('jiraReleaseDates', JSON.stringify(releaseDates));
+        document.getElementById('releaseDateInput').value = '';
+        syncReleaseDatePicker();
+    }
+
+    function getReleaseDateKey(project, release) {
+        return releaseDates[`${project}:${release}`] || null;
+    }
+
+    function syncReleaseDatePicker() {
+        const project = getConfig().project;
+        const select = document.getElementById('releaseDatePicker');
+        const current = select.value;
+        select.innerHTML = '<option value="">-- Select RC --</option>';
+        Object.keys(releaseMap).sort((a, b) => {
+            const aParts = a.match(/(\d+)\.(\d+)/);
+            const bParts = b.match(/(\d+)\.(\d+)/);
+            if (aParts && bParts) return parseInt(bParts[1]) - parseInt(aParts[1]) || parseInt(bParts[2]) - parseInt(aParts[2]);
+            return b.localeCompare(a);
+        }).forEach(key => {
+            const dateKey = `${project}:${key}`;
+            const date = releaseDates[dateKey];
+            const label = date ? `RC ${key}  ·  ${date.replace('T', ' ')}` : `RC ${key}`;
+            select.innerHTML += `<option value="${key}">${label}</option>`;
+        });
+        if (current) {
+            select.value = current;
+            const dateKey = `${project}:${current}`;
+            document.getElementById('releaseDateInput').value = releaseDates[dateKey] || '';
+        }
+    }
+
+    // Update date input when RC selection changes
+    document.getElementById('releaseDatePicker').addEventListener('change', function() {
+        const key = `${getConfig().project}:${this.value}`;
+        document.getElementById('releaseDateInput').value = releaseDates[key] || '';
+    });
+
+    // --- Assigned to me ---
+    const DAMJAN_ACCOUNT_ID = '5e4d7a1129e6d00c9706d742';
+
+    async function loadAssignedToMe() {
+        const cfg = getConfig();
+        const el = document.getElementById('assignedMeResults');
+        el.innerHTML = '<div class="loading">Loading...</div>';
+        const jql = `assignee = "${DAMJAN_ACCOUNT_ID}" AND project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) ORDER BY updated DESC`;
+        try {
+            const d = await jiraSearchAll(jql, 100);
+            const count = d.issues.length;
+            const countEl = document.getElementById('assignedMeCount');
+            countEl.textContent = count;
+            countEl.style.display = count ? 'inline' : 'none';
+            if (!count) { el.innerHTML = '<div class="empty-state" style="padding:12px;">No open tickets assigned to you.</div>'; return; }
+            const rows = d.issues.map(i => {
+                const f = i.fields;
+                const sc = getStatusCategory(f.status?.name);
+                const pc = getPriorityClass(f.priority?.name);
+                return `<div style="display:flex; align-items:baseline; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border);">
+                    <a href="${cfg.url}/browse/${i.key}" target="_blank" style="color:var(--primary);font-weight:600;white-space:nowrap;">${i.key}</a>
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(f.summary||'').replace(/"/g,'&quot;')}">${f.summary||''}</span>
+                    <span class="status-badge status-${sc}" style="font-size:11px;white-space:nowrap;">${f.status?.name||''}</span>
+                    <span class="${pc}" style="font-size:11px;white-space:nowrap;">${f.priority?.name||''}</span>
+                </div>`;
+            }).join('');
+            el.innerHTML = rows;
+        } catch(e) {
+            el.innerHTML = `<div class="error" style="margin:8px;">${e.message}</div>`;
+        }
+    }
+
     // --- Project avatars ---
     const projectAvatars = {
         'SPFAM':     'https://smithmicro.atlassian.net/rest/api/2/universal_avatar/view/type/project/avatar/10666',
@@ -646,12 +902,15 @@
 
     // --- Init ---
     loadSavedConfig();
+    loadReleaseDates();
     updateProjectAvatar();
+    loadAssignedToMe();
 
     // Reload versions when project changes
     document.getElementById('projectKey').addEventListener('change', () => {
         loadProjectVersions();
         updateProjectAvatar();
+        syncReleaseDatePicker();
     });
 
     // --- Metrics ---
@@ -684,11 +943,16 @@
         const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
         const baseJql = `project = ${cfg.project} AND ${versionFilter}`;
 
+        // Production bugs use ONLY affectedVersion — a bug fixed in this release but found in an older one should not count
+        const prodJql = `project = ${cfg.project} AND issuetype = Bug AND labels = Production_Issue AND affectedVersion IN (${versionList})`;
+        // Total bugs for leakage denominator: all bugs found in this release (affectedVersion only, not fixVersion)
+        const totalBugsJql = `project = ${cfg.project} AND issuetype = Bug AND affectedVersion IN (${versionList})`;
+
         try {
             // Run queries in parallel
             const [allBugs, prodBugs, allStories] = await Promise.all([
-                jiraSearchAll(`${baseJql} AND issuetype = Bug`, 500),
-                jiraSearchAll(`${baseJql} AND issuetype = Bug AND labels = Production_Issue`, 500),
+                jiraSearchAll(`${totalBugsJql}`, 500),
+                jiraSearchAll(`${prodJql}`, 500),
                 jiraSearchAll(`${baseJql} AND issuetype IN (Story, "Dev Story")`, 500)
             ]);
 
@@ -697,7 +961,6 @@
             const totalStories = allStories.issues.length;
             const leakagePct = totalBugs > 0 ? Math.round((totalProdBugs / totalBugs) * 100) : 0;
             const leakageColor = leakagePct === 0 ? 'success' : leakagePct <= 20 ? 'warning' : 'danger';
-            const releasedLabel = 'label = Production_Issue';
 
             // --- Metric cards ---
             document.getElementById('metricCards').innerHTML = `
@@ -711,21 +974,14 @@
                     <div class="metric-title">Total Bugs</div>
                     <div class="metric-value">${totalBugs}</div>
                     <div class="metric-sub">All bugs for RC ${release}</div>
-                    <div class="metric-desc">Includes open, in progress, merged, and closed bugs</div>
+                    <div class="metric-desc">Bugs with affectedVersion matching this release</div>
                 </div>
                 <div class="metric-card ${totalProdBugs > 0 ? 'danger' : 'success'}">
                     <div class="metric-title">Production Bugs</div>
                     <div class="metric-value">${totalProdBugs}</div>
                     <div class="metric-sub">label = Production_Issue</div>
-                    <div class="metric-desc">Bugs that escaped to production and were labelled accordingly</div>
+                    <div class="metric-desc">Bugs with label Production_Issue and affectedVersion matching this release</div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-title">Stories</div>
-                    <div class="metric-value">${totalStories}</div>
-                    <div class="metric-sub">Story + Dev Story for RC ${release}</div>
-                    <div class="metric-desc">Total stories delivered in this release</div>
-                </div>
-            `;
                 <div class="metric-card">
                     <div class="metric-title">Stories</div>
                     <div class="metric-value">${totalStories}</div>
