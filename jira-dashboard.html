@@ -407,10 +407,7 @@
         const releaseKey = document.getElementById('releaseVersion').value;
         const fixVersions = releaseMap[releaseKey] || [releaseKey];
         const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-        const patchNumbers = new Set([releaseKey]);
-        fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
-        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
-        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${releaseKey}")`;
 
         // Format datetime for JQL: "2026-07-25 14:30" (JQL uses yyyy-MM-dd HH:mm)
         const jqlDate = releaseDate.replace('T', ' ');
@@ -472,7 +469,13 @@
         if (!filter) {
             jql = baseJql;
         } else if (filter.type === 'status') {
-            jql = `${baseJql} AND status = "${filter.value}"`;
+            // Insert status filter before ORDER BY
+            const orderByIdx = baseJql.toUpperCase().lastIndexOf(' ORDER BY');
+            if (orderByIdx !== -1) {
+                jql = baseJql.slice(0, orderByIdx) + ` AND status = "${filter.value}"` + baseJql.slice(orderByIdx);
+            } else {
+                jql = `${baseJql} AND status = "${filter.value}"`;
+            }
         } else if (filter.type === 'nextRc') {
             // Use the stored nextRc JQL from computeNextRc
             jql = tabBaseJql['nextRc'] || baseJql;
@@ -539,12 +542,9 @@
             const m = v.match(/(\d+\.\d+\.\d+)/);
             if (m) patchNumbers.add(m[1]);
         });
-        // Always include Planned Release — field is customfield_10102, stores plain x.y or x.y.z strings
+        // Always include Planned Release — field is a dropdown, only use base x.y key (not x.y.z patch variants)
         const plannedField = PLANNED_RELEASE_FIELD;
-        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
-        const plannedPart = patchNumbers.size > 1
-            ? `${plannedField} IN (${plannedList})`
-            : `${plannedField} = "${release}"`;
+        const plannedPart = `${plannedField} = "${release}"`;
 
         const parts = [fixPart, affectedPart, plannedPart].filter(Boolean);
         const versionFilter = parts.length > 1 ? `(${parts.join(' OR ')})` : parts[0] || `fixVersion IN (${versionList})`;
@@ -585,10 +585,7 @@
         if (release) {
             const fixVersions = releaseMap[release] || [release];
             const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-            const patchNumbers = new Set([release]);
-            fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
-            const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
-            const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+            const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${release}")`;
             jql += ` AND ${versionFilter}`;
             localStorage.setItem('jiraOpenRelease', release);
         }
@@ -625,7 +622,7 @@
     // --- Fetch project versions ---
     let releaseMap = {}; // { "8.4": ["Android 8.4.0", "iOS 8.4.1", ...] }
     // Planned Release field ID (customfield_10102) stores plain x.y strings
-    const PLANNED_RELEASE_FIELD = 'customfield_10102';
+    const PLANNED_RELEASE_FIELD = '"Planned Release"';
     let plannedReleaseValues = new Set();
 
     function extractReleaseKey(versionName) {
@@ -937,10 +934,7 @@
 
         const fixVersions = releaseMap[release] || [release];
         const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-        const patchNumbers = new Set([release]);
-        fixVersions.forEach(v => { const m = v.match(/(\d+\.\d+\.\d+)/); if (m) patchNumbers.add(m[1]); });
-        const plannedList = [...patchNumbers].map(p => `"${p}"`).join(', ');
-        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} IN (${plannedList}))`;
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${release}")`;
         const baseJql = `project = ${cfg.project} AND ${versionFilter}`;
 
         // Production bugs use ONLY affectedVersion — a bug fixed in this release but found in an older one should not count
