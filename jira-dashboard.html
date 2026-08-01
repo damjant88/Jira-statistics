@@ -413,7 +413,7 @@
         const jqlDate = releaseDate.replace('T', ' ');
 
         // JQL status change clause — Jira evaluates this precisely against the changelog
-        const jql = `project = ${cfg.project} AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}"`;
+        const jql = `project = ${cfg.project} AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
         tabBaseJql['nextRc'] = jql;
 
         try {
