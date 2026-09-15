@@ -2,6 +2,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const PORT = 3939;
@@ -13,14 +14,28 @@ const HOST = '127.0.0.1';
 const ROOT = __dirname;
 
 // Only these hosts may be reached through /jira-proxy. Without an allowlist the
-// endpoint is an open relay: it forwards the caller's Authorization header to
-// whatever host the url param names, which both leaks the Jira credential and
-// turns this process into an SSRF pivot.
+// endpoint is an open relay: it forwards the Authorization header to whatever
+// host the url param names, which both leaks the Jira credential and turns this
+// process into an SSRF pivot.
 const ALLOWED_HOSTS = new Set(
     (process.env.JIRA_ALLOWED_HOSTS || 'smithmicro.atlassian.net')
         .split(',')
         .map(h => h.trim().toLowerCase())
         .filter(Boolean)
+);
+
+// Requests the browser labels as cross-site are refused: without CORS headers a
+// hostile page cannot read our responses, but it could still *send* requests and
+// have them answered with our credentials attached.
+const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
+
+// Credentials live here rather than in the browser, so no page — and no XSS in
+// one — ever holds the Jira token. Kept outside the repo directory, which is
+// inside OneDrive and would otherwise sync the token to the cloud.
+const CREDENTIALS_PATH = process.env.JIRA_CREDENTIALS_PATH || path.join(
+    process.env.APPDATA || path.join(os.homedir(), '.config'),
+    'jira-dashboard',
+    'config.json'
 );
 
 const MIME_TYPES = {
@@ -32,9 +47,52 @@ const MIME_TYPES = {
     '.ico': 'image/x-icon'
 };
 
-function sendJson(res, status, body) {
-    res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(body));
+// Returns { email, token, source } or null. Env vars win over the config file.
+function loadCredentials() {
+    if (process.env.JIRA_EMAIL && process.env.JIRA_API_TOKEN) {
+        return { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN, source: 'environment' };
+    }
+    try {
+        const raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+        const cfg = JSON.parse(raw);
+        if (cfg.email && cfg.token) {
+            return { email: cfg.email, token: cfg.token, source: CREDENTIALS_PATH };
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+// The client's own Authorization header wins, so typing a token into Settings
+// still works; otherwise the server supplies the configured credential.
+function authHeaderFor(clientAuthHeader, credentials) {
+    if (clientAuthHeader) return clientAuthHeader;
+    if (!credentials) return null;
+    return 'Basic ' + Buffer.from(`${credentials.email}:${credentials.token}`).toString('base64');
+}
+
+function isAllowedTarget(targetUrl) {
+    let target;
+    try {
+        target = new URL(targetUrl);
+    } catch {
+        return { ok: false, reason: 'Malformed url param', status: 400 };
+    }
+    if (target.protocol !== 'https:' || !ALLOWED_HOSTS.has(target.hostname.toLowerCase())) {
+        return { ok: false, reason: `Target not allowed: ${target.protocol}//${target.hostname}`, status: 403 };
+    }
+    return { ok: true, target };
+}
+
+// True when the request is same-origin, or carries no browser origin hints at
+// all (curl, the dashboard opened directly). A cross-site fetch is refused.
+function isSameSiteRequest(headers) {
+    const fetchSite = headers['sec-fetch-site'];
+    if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
+    const origin = headers['origin'];
+    if (origin && !ALLOWED_ORIGINS.has(origin)) return false;
+    return true;
 }
 
 // Resolve a request path inside ROOT, or null if it escapes.
@@ -54,6 +112,13 @@ function resolveStaticPath(requestUrl) {
     return resolved;
 }
 
+function sendJson(res, status, body) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+}
+
+let credentials = loadCredentials();
+
 const server = http.createServer((req, res) => {
     // No CORS headers: the dashboard is served by this same process, so its
     // requests are same-origin. "Access-Control-Allow-Origin: *" let any site
@@ -66,6 +131,17 @@ const server = http.createServer((req, res) => {
 
     // Proxy endpoint: /jira-proxy?url=<encoded-jira-url>
     if (req.url.startsWith('/jira-proxy')) {
+        if (!isSameSiteRequest(req.headers)) {
+            sendJson(res, 403, { error: 'Cross-site request refused' });
+            return;
+        }
+        // The dashboard only reads. Refusing everything else keeps the
+        // server-held credential from being used for writes.
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            sendJson(res, 405, { error: 'Only GET is allowed' });
+            return;
+        }
+
         const parsed = url.parse(req.url, true);
         const targetUrl = parsed.query.url;
         if (!targetUrl) {
@@ -73,27 +149,29 @@ const server = http.createServer((req, res) => {
             return;
         }
 
-        let target;
-        try {
-            target = new URL(targetUrl);
-        } catch {
-            sendJson(res, 400, { error: 'Malformed url param' });
+        const check = isAllowedTarget(targetUrl);
+        if (!check.ok) {
+            sendJson(res, check.status, { error: check.reason });
             return;
         }
-        if (target.protocol !== 'https:' || !ALLOWED_HOSTS.has(target.hostname.toLowerCase())) {
-            sendJson(res, 403, { error: `Target not allowed: ${target.protocol}//${target.hostname}` });
+        const target = check.target;
+
+        const auth = authHeaderFor(req.headers['authorization'], credentials);
+        if (!auth) {
+            sendJson(res, 401, {
+                error: 'No Jira credentials configured. Run "node setup-credentials.js", '
+                     + 'or enter a token in the dashboard Settings panel.'
+            });
             return;
         }
 
-        const authHeader = req.headers['authorization'];
         const options = {
             hostname: target.hostname,
             port: 443,
             path: target.pathname + target.search,
             method: req.method,
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': auth }
         };
-        if (authHeader) options.headers['Authorization'] = authHeader;
 
         const proxyReq = https.request(options, (proxyRes) => {
             res.writeHead(proxyRes.statusCode, {
@@ -104,8 +182,7 @@ const server = http.createServer((req, res) => {
         proxyReq.on('error', (e) => {
             sendJson(res, 502, { error: 'Proxy error: ' + e.message });
         });
-        // Forward the request body; end() alone silently dropped POST/PUT bodies.
-        req.pipe(proxyReq);
+        proxyReq.end();
         return;
     }
 
@@ -130,9 +207,19 @@ const server = http.createServer((req, res) => {
     });
 });
 
-server.listen(PORT, HOST, () => {
-    console.log(`\n  Jira Dashboard Server running at:`);
-    console.log(`  -> http://localhost:${PORT}\n`);
-    console.log(`  Bound to ${HOST} only. Allowed proxy hosts: ${[...ALLOWED_HOSTS].join(', ')}\n`);
-    console.log(`  Press Ctrl+C to stop.\n`);
-});
+if (require.main === module) {
+    server.listen(PORT, HOST, () => {
+        console.log(`\n  Jira Dashboard Server running at:`);
+        console.log(`  -> http://localhost:${PORT}\n`);
+        console.log(`  Bound to ${HOST} only. Allowed proxy hosts: ${[...ALLOWED_HOSTS].join(', ')}`);
+        if (credentials) {
+            console.log(`  Jira credentials: ${credentials.email} (from ${credentials.source})\n`);
+        } else {
+            console.log(`  Jira credentials: NONE — run "node setup-credentials.js" to store them,`);
+            console.log(`  or enter a token in the dashboard Settings panel.\n`);
+        }
+        console.log(`  Press Ctrl+C to stop.\n`);
+    });
+}
+
+module.exports = { resolveStaticPath, isAllowedTarget, isSameSiteRequest, authHeaderFor, loadCredentials, CREDENTIALS_PATH };

@@ -115,7 +115,7 @@
         <div class="config-row">
             <div class="config-field"><label>Jira Base URL</label><input type="text" id="jiraUrl" value="https://smithmicro.atlassian.net"></div>
             <div class="config-field"><label>Email</label><input type="email" id="jiraEmail" placeholder="you@company.com"></div>
-            <div class="config-field"><label>API Token</label><input type="password" id="jiraToken" placeholder="Your Jira API token"></div>
+            <div class="config-field"><label>API Token</label><input type="password" id="jiraToken" placeholder="Leave blank — proxy supplies it"></div>
         </div>
         <div class="config-row">
             <div class="config-field">
@@ -281,6 +281,17 @@
     </div>
     <script>
     // --- Config ---
+    // Credentials normally live on the proxy (setup-credentials.js), so the page
+    // holds nothing to steal. A token typed into Settings still overrides.
+    function authHeaders() {
+        const cfg = getConfig();
+        const headers = { 'Accept': 'application/json' };
+        if (cfg.email && cfg.token) {
+            headers['Authorization'] = 'Basic ' + btoa(cfg.email + ':' + cfg.token);
+        }
+        return headers;
+    }
+
     // --- Escaping helpers ---
     // Jira content (summaries, labels, status names, display names) is
     // attacker-controlled: anyone who can file or edit a ticket can put markup
@@ -365,8 +376,8 @@
     // --- API (using Jira REST API v3 /search/jql endpoint) ---
     async function jiraSearch(jql, maxResults = 50, startAt = 0) {
         const cfg = getConfig();
-        if (!cfg.url || !cfg.email || !cfg.token) {
-            throw new Error('Please configure Jira connection in Settings.');
+        if (!cfg.url) {
+            throw new Error('Please configure the Jira base URL in Settings.');
         }
         const fields = 'summary,status,priority,assignee,issuetype,fixVersions,labels,created,updated';
         const params = new URLSearchParams({ jql, maxResults, startAt, fields });
@@ -375,10 +386,7 @@
         // Route through local proxy to avoid CORS
         const proxyUrl = `/jira-proxy?url=${encodeURIComponent(jiraApiUrl)}`;
         const resp = await fetch(proxyUrl, {
-            headers: {
-                'Authorization': 'Basic ' + btoa(cfg.email + ':' + cfg.token),
-                'Accept': 'application/json'
-            }
+            headers: authHeaders()
         });
         if (!resp.ok) {
             const err = await resp.text();
@@ -692,10 +700,7 @@
         const jiraApiUrl = `${cfg.url}${apiPath}`;
         const proxyUrl = `/jira-proxy?url=${encodeURIComponent(jiraApiUrl)}`;
         const resp = await fetch(proxyUrl, {
-            headers: {
-                'Authorization': 'Basic ' + btoa(cfg.email + ':' + cfg.token),
-                'Accept': 'application/json'
-            }
+            headers: authHeaders()
         });
         if (!resp.ok) throw new Error(`API error ${resp.status}`);
         return resp.json();
@@ -707,7 +712,7 @@
 
     async function loadProjectVersions() {
         const cfg = getConfig();
-        if (!cfg.url || !cfg.email || !cfg.token) return;
+        if (!cfg.url) return;
         const project = cfg.project;
 
         const versions = await jiraGet(`/rest/api/3/project/${project}/versions`).catch(() => []);
@@ -945,7 +950,7 @@
         const img = document.getElementById('projectAvatar');
         const cfg = getConfig();
         const url = projectAvatars[key];
-        if (url && cfg.email && cfg.token) {
+        if (url && cfg.url) {
             img.src = `/jira-proxy?url=${encodeURIComponent(url)}`;
             img.style.display = 'block';
             img.onerror = () => { img.style.display = 'none'; };
