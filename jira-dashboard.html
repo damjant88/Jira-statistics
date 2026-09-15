@@ -149,7 +149,7 @@
             </div>
         </div>
         <div class="config-field release-manager">
-            <label>Release Date</label>
+            <label>Latest Release Date</label>
             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                 <select id="releaseDatePicker" style="min-width:160px;"><option value="">-- Select RC --</option></select>
                 <input type="datetime-local" id="releaseDateInput" style="min-width:190px; padding:8px 12px; border:1px solid var(--border); border-radius:4px; font-size:14px;">
@@ -389,11 +389,10 @@
             const cfg = getConfig();
             const releaseKey = document.getElementById('releaseVersion').value;
             const releaseDate = getReleaseDateKey(cfg.project, releaseKey);
-            if (releaseDate) {
-                nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="QE Verified→Merged after ${releaseDate}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
-                // Compute async after render
-                computeNextRc(issues, releaseDate, tableId);
-            }
+            const title = releaseDate ? `Merged after ${releaseDate} + planned (not yet done)` : 'All planned/not yet done for this release';
+            nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="${title}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
+            // Compute async after render
+            computeNextRc(issues, releaseDate, tableId);
         }
 
         document.getElementById(summaryId).innerHTML =
@@ -409,11 +408,15 @@
         const versionList = fixVersions.map(v => `"${v}"`).join(', ');
         const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${releaseKey}")`;
 
-        // Format datetime for JQL: "2026-07-25 14:30" (JQL uses yyyy-MM-dd HH:mm)
-        const jqlDate = releaseDate.replace('T', ' ');
-
-        // JQL status change clause — Jira evaluates this precisely against the changelog
-        const jql = `project = ${cfg.project} AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
+        // If a release date is set, find tickets merged after that date.
+        // If no date is set, fall back to all non-closed tickets for this release across all projects.
+        let jql;
+        if (releaseDate) {
+            const jqlDate = releaseDate.replace('T', ' ');
+            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
+        } else {
+            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status != Closed`;
+        }
         tabBaseJql['nextRc'] = jql;
 
         try {
