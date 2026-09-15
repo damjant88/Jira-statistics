@@ -4,33 +4,56 @@
 // Writes {email, token} to %APPDATA%\jira-dashboard\config.json (override with
 // JIRA_CREDENTIALS_PATH). Deliberately outside the repo directory, which lives
 // in OneDrive and would sync the token to the cloud.
+//
+// Values can also be piped in, one per line (email, then token), for unattended
+// setup: echo "me@example.com`nTOKEN" | node setup-credentials.js
 
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { execFile } = require('child_process');
+const { Writable } = require('stream');
 const { CREDENTIALS_PATH } = require('./jira-proxy');
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const interactive = Boolean(process.stdin.isTTY);
+
+// --- piped input ---------------------------------------------------------
+let pipedLines = [];
+
+function readAllStdin() {
+    return new Promise(resolve => {
+        let data = '';
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('data', chunk => { data += chunk; });
+        process.stdin.on('end', () => resolve(data));
+    });
+}
+
+// --- interactive input ---------------------------------------------------
+// Output passes through a stream we can silence, so the token can be read
+// without echoing it to the screen or into terminal scrollback.
+const output = new Writable({
+    write(chunk, encoding, callback) {
+        if (!output.muted) process.stdout.write(chunk, encoding);
+        callback();
+    }
+});
+const rl = interactive
+    ? readline.createInterface({ input: process.stdin, output, terminal: true })
+    : null;
 
 function ask(question) {
+    if (!interactive) return Promise.resolve(pipedLines.shift() || '');
     return new Promise(resolve => rl.question(question, resolve));
 }
 
-// Same as ask(), but keeps the typed characters off the screen and out of any
-// terminal scrollback.
 function askHidden(question) {
+    if (!interactive) return Promise.resolve(pipedLines.shift() || '');
     return new Promise(resolve => {
         process.stdout.write(question);
-        const onData = char => {
-            if (['\n', '\r', ''].includes(char.toString())) return;
-            readline.moveCursor(process.stdout, -1000, 0);
-            readline.clearLine(process.stdout, 1);
-            process.stdout.write(question);
-        };
-        process.stdin.on('data', onData);
+        output.muted = true;
         rl.question('', answer => {
-            process.stdin.removeListener('data', onData);
+            output.muted = false;
             process.stdout.write('\n');
             resolve(answer);
         });
@@ -50,19 +73,23 @@ function restrictPermissions(file) {
 }
 
 (async () => {
+    if (!interactive) {
+        pipedLines = (await readAllStdin()).split('\n').map(l => l.replace(/\r$/, ''));
+    }
+
     console.log(`\n  Credentials file: ${CREDENTIALS_PATH}\n`);
     if (fs.existsSync(CREDENTIALS_PATH)) {
         const overwrite = await ask('  A credentials file already exists. Overwrite? [y/N] ');
         if (!/^y(es)?$/i.test(overwrite.trim())) {
             console.log('  Left unchanged.');
-            rl.close();
+            if (rl) rl.close();
             return;
         }
     }
 
     const email = (await ask('  Jira email: ')).trim();
     const token = (await askHidden('  Jira API token (input hidden): ')).trim();
-    rl.close();
+    if (rl) rl.close();
 
     if (!email || !token) {
         console.error('\n  Both an email and a token are required. Nothing written.');
