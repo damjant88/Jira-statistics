@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'">
     <title>Jira Dashboard</title>
     <style>
         :root {
@@ -280,6 +281,24 @@
     </div>
     <script>
     // --- Config ---
+    // --- Escaping helpers ---
+    // Jira content (summaries, labels, status names, display names) is
+    // attacker-controlled: anyone who can file or edit a ticket can put markup
+    // in it. Every interpolation of Jira data into HTML goes through esc().
+    function esc(v) {
+        return String(v ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[c]);
+    }
+    // A safe JS string literal for use inside an HTML attribute (inline handlers).
+    function escJs(v) {
+        return esc(JSON.stringify(v ?? null));
+    }
+    // Escape a value embedded in a double-quoted JQL string.
+    function jqlStr(v) {
+        return String(v ?? '').replace(/(["\\])/g, '\\$1');
+    }
+
     function getConfig() {
         return {
             url: document.getElementById('jiraUrl').value.replace(/\/$/, ''),
@@ -291,18 +310,31 @@
     function saveConfig() {
         const cfg = getConfig();
         const defaultProject = document.getElementById('defaultProject').value;
-        localStorage.setItem('jiraDashConfig', JSON.stringify({ url: cfg.url, email: cfg.email, token: cfg.token, defaultProject }));
+        // The API token is an unscoped credential carrying every permission the
+        // account has, so it is kept out of localStorage: sessionStorage drops it
+        // when the browser session ends instead of persisting it indefinitely.
+        localStorage.setItem('jiraDashConfig', JSON.stringify({ url: cfg.url, email: cfg.email, defaultProject }));
+        sessionStorage.setItem('jiraDashToken', cfg.token);
         applyDefaultProject(defaultProject);
         toggleConfig();
         loadReleaseStories();
     }
     function loadSavedConfig() {
+        document.getElementById('jiraToken').value = sessionStorage.getItem('jiraDashToken') || '';
         const saved = localStorage.getItem('jiraDashConfig');
         if (saved) {
             const cfg = JSON.parse(saved);
             document.getElementById('jiraUrl').value = cfg.url || '';
             document.getElementById('jiraEmail').value = cfg.email || '';
-            document.getElementById('jiraToken').value = cfg.token || '';
+            if (cfg.token) {
+                // Migrate a token left in localStorage by an earlier version, and
+                // strip it from the persisted copy.
+                sessionStorage.setItem('jiraDashToken', cfg.token);
+                document.getElementById('jiraToken').value = cfg.token;
+                localStorage.setItem('jiraDashConfig', JSON.stringify({
+                    url: cfg.url, email: cfg.email, defaultProject: cfg.defaultProject
+                }));
+            }
             if (cfg.defaultProject) {
                 document.getElementById('defaultProject').value = cfg.defaultProject;
                 applyDefaultProject(cfg.defaultProject);
@@ -402,14 +434,14 @@
             const releaseKey = document.getElementById('releaseVersion').value;
             const releaseDate = getReleaseDateKey(cfg.project, releaseKey);
             const title = releaseDate ? `Merged after ${releaseDate} + planned (not yet done)` : 'All planned/not yet done for this release';
-            nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="${title}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
+            nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="${esc(title)}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
             // Compute async after render
             computeNextRc(issues, releaseDate, tableId);
         }
 
         document.getElementById(summaryId).innerHTML =
             `<div class="summary-card clickable active" onclick="filterByStatus('${tableId}', null, this)"><div class="number">${issues.length}</div><div class="label">Total</div></div>` +
-            Object.entries(map).map(([s,c]) => `<div class="summary-card clickable" onclick="filterByStatus('${tableId}', '${s.replace(/'/g,"\\'")}', this)"><div class="number">${c}</div><div class="label">${s}</div></div>`).join('') +
+            Object.entries(map).map(([s,c]) => `<div class="summary-card clickable" onclick="filterByStatus('${tableId}', ${escJs(s)}, this)"><div class="number">${c}</div><div class="label">${esc(s)}</div></div>`).join('') +
             nextRcCard;
     }
 
@@ -417,15 +449,15 @@
         const cfg = getConfig();
         const releaseKey = document.getElementById('releaseVersion').value;
         const fixVersions = releaseMap[releaseKey] || [releaseKey];
-        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${releaseKey}")`;
+        const versionList = fixVersions.map(v => `"${jqlStr(v)}"`).join(', ');
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${jqlStr(releaseKey)}")`;
 
         // If a release date is set, find tickets merged after that date.
         // If no date is set, fall back to all non-closed tickets for this release across all projects.
         let jql;
         if (releaseDate) {
             const jqlDate = releaseDate.replace('T', ' ');
-            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
+            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status changed to "Merged" after "${jqlStr(jqlDate)}" AND status != Closed`;
         } else {
             jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status != Closed`;
         }
@@ -487,9 +519,9 @@
             // Insert status filter before ORDER BY
             const orderByIdx = baseJql.toUpperCase().lastIndexOf(' ORDER BY');
             if (orderByIdx !== -1) {
-                jql = baseJql.slice(0, orderByIdx) + ` AND status = "${filter.value}"` + baseJql.slice(orderByIdx);
+                jql = baseJql.slice(0, orderByIdx) + ` AND status = "${jqlStr(filter.value)}"` + baseJql.slice(orderByIdx);
             } else {
-                jql = `${baseJql} AND status = "${filter.value}"`;
+                jql = `${baseJql} AND status = "${jqlStr(filter.value)}"`;
             }
         } else if (filter.type === 'nextRc') {
             // Use the stored nextRc JQL from computeNextRc
@@ -507,25 +539,25 @@
             const pc = getPriorityClass(f.priority?.name);
             const assignee = f.assignee?.displayName || 'Unassigned';
             const vers = (f.fixVersions||[]).map(v=>v.name).join(', ');
-            const labels = (f.labels||[]).map(l=>`<span class="tag">${l}</span>`).join('');
+            const labels = (f.labels||[]).map(l=>`<span class="tag">${esc(l)}</span>`).join('');
             return `<tr>
-                <td><a href="${cfg.url}/browse/${i.key}" target="_blank">${i.key}</a></td>
-                <td>${f.summary||''}</td>
-                <td><span class="status-badge status-${sc}">${f.status?.name||''}</span></td>
-                <td class="${pc}">${f.priority?.name||''}</td>
-                <td>${f.issuetype?.name||''}</td>
-                <td>${assignee}</td>
-                <td>${vers}</td>
+                <td><a href="${esc(cfg.url)}/browse/${esc(i.key)}" target="_blank">${esc(i.key)}</a></td>
+                <td>${esc(f.summary)}</td>
+                <td><span class="status-badge status-${sc}">${esc(f.status?.name)}</span></td>
+                <td class="${pc}">${esc(f.priority?.name)}</td>
+                <td>${esc(f.issuetype?.name)}</td>
+                <td>${esc(assignee)}</td>
+                <td>${esc(vers)}</td>
                 <td>${labels}</td>
             </tr>`;
         }).join('');
         document.getElementById(id).innerHTML = `<table><thead><tr><th>Key</th><th>Summary</th><th>Status</th><th>Priority</th><th>Type</th><th>Assignee</th><th>Fix Version</th><th>Labels</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
     function showLoading(id) { document.getElementById(id).innerHTML = '<div class="loading">Loading...</div>'; }
-    function showError(id, msg) { document.getElementById(id).innerHTML = `<div class="error">${msg}</div>`; }
+    function showError(id, msg) { document.getElementById(id).innerHTML = `<div class="error">${esc(msg)}</div>`; }
     function showUsedQuery(id, jql) {
         const el = document.getElementById(id);
-        el.innerHTML = `<span class="query-label">JQL:</span><span id="${id}-text">${jql}</span><button onclick="copyJql('${id}-text')" style="margin-left:10px;padding:2px 8px;font-size:11px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:#fff;">Copy</button>`;
+        el.innerHTML = `<span class="query-label">JQL:</span><span id="${id}-text">${esc(jql)}</span><button onclick="copyJql('${id}-text')" style="margin-left:10px;padding:2px 8px;font-size:11px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:#fff;">Copy</button>`;
         el.classList.add('visible');
     }
 
@@ -544,7 +576,7 @@
         if (!release) { showError('releaseResults', 'Select a release.'); return; }
         saveReleaseFilter();
         const fixVersions = releaseMap[release] || [release];
-        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
+        const versionList = fixVersions.map(v => `"${jqlStr(v)}"`).join(', ');
 
         // Build version filter: fixVersion + affectedVersion use full names, Planned Release uses x.y / x.y.z directly
         const fixPart = fixVersions.length ? `fixVersion IN (${versionList})` : null;
@@ -559,7 +591,7 @@
         });
         // Always include Planned Release — field is a dropdown, only use base x.y key (not x.y.z patch variants)
         const plannedField = PLANNED_RELEASE_FIELD;
-        const plannedPart = `${plannedField} = "${release}"`;
+        const plannedPart = `${plannedField} = "${jqlStr(release)}"`;
 
         const parts = [fixPart, affectedPart, plannedPart].filter(Boolean);
         const versionFilter = parts.length > 1 ? `(${parts.join(' OR ')})` : parts[0] || `fixVersion IN (${versionList})`;
@@ -567,7 +599,7 @@
         if (type === 'Story') {
             jql += ` AND issuetype IN (Story, "Dev Story")`;
         } else if (type) {
-            jql += ` AND issuetype = "${type}"`;
+            jql += ` AND issuetype = "${jqlStr(type)}"`;
         }
         jql += ' ORDER BY status ASC, key ASC';
         showLoading('releaseResults');
@@ -581,7 +613,7 @@
         const cfg = getConfig();
         const priority = document.getElementById('bugPriority').value;
         const sf = document.getElementById('bugStatusFilter').value;
-        let jql = `project = ${cfg.project} AND issuetype = Bug AND priority = "${priority}"`;
+        let jql = `project = ${cfg.project} AND issuetype = Bug AND priority = "${jqlStr(priority)}"`;
         if (sf === 'notClosed') jql += ' AND status != Closed';
         else if (sf === 'open') jql += ' AND status = Open';
         jql += ' ORDER BY updated DESC';
@@ -596,11 +628,11 @@
         const type = document.getElementById('openIssueType').value;
         const release = document.getElementById('openRelease').value;
         let jql = `project = ${cfg.project} AND status != Closed`;
-        if (type) jql += ` AND issuetype = "${type}"`;
+        if (type) jql += ` AND issuetype = "${jqlStr(type)}"`;
         if (release) {
             const fixVersions = releaseMap[release] || [release];
-            const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-            const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${release}")`;
+            const versionList = fixVersions.map(v => `"${jqlStr(v)}"`).join(', ');
+            const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${jqlStr(release)}")`;
             jql += ` AND ${versionFilter}`;
             localStorage.setItem('jiraOpenRelease', release);
         }
@@ -773,7 +805,7 @@
         select.innerHTML = includeAll ? '<option value="">All</option>' : '<option value="">-- Select release --</option>';
         sortedKeys.forEach(key => {
             const label = releaseReleased[key] ? `RC ${key} (released)` : `RC ${key}`;
-            select.innerHTML += `<option value="${key}">${label}</option>`;
+            select.innerHTML += `<option value="${esc(key)}">${esc(label)}</option>`;
         });
         if (currentValue) select.value = currentValue;
     }
@@ -789,7 +821,7 @@
         });
         sorted.forEach(v => {
             const label = v.released ? `${v.name} (released)` : v.name;
-            select.innerHTML += `<option value="${v.name}">${label}</option>`;
+            select.innerHTML += `<option value="${esc(v.name)}">${esc(label)}</option>`;
         });
         if (currentValue) select.value = currentValue;
     }
@@ -842,7 +874,7 @@
             const dateKey = `${project}:${key}`;
             const date = releaseDates[dateKey];
             const label = date ? `RC ${key}  ·  ${date.replace('T', ' ')}` : `RC ${key}`;
-            select.innerHTML += `<option value="${key}">${label}</option>`;
+            select.innerHTML += `<option value="${esc(key)}">${esc(label)}</option>`;
         });
         if (current) {
             select.value = current;
@@ -877,15 +909,15 @@
                 const sc = getStatusCategory(f.status?.name);
                 const pc = getPriorityClass(f.priority?.name);
                 return `<div style="display:flex; align-items:baseline; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border);">
-                    <a href="${cfg.url}/browse/${i.key}" target="_blank" style="color:var(--primary);font-weight:600;white-space:nowrap;">${i.key}</a>
-                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(f.summary||'').replace(/"/g,'&quot;')}">${f.summary||''}</span>
-                    <span class="status-badge status-${sc}" style="font-size:11px;white-space:nowrap;">${f.status?.name||''}</span>
-                    <span class="${pc}" style="font-size:11px;white-space:nowrap;">${f.priority?.name||''}</span>
+                    <a href="${esc(cfg.url)}/browse/${esc(i.key)}" target="_blank" style="color:var(--primary);font-weight:600;white-space:nowrap;">${esc(i.key)}</a>
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(f.summary)}">${esc(f.summary)}</span>
+                    <span class="status-badge status-${sc}" style="font-size:11px;white-space:nowrap;">${esc(f.status?.name)}</span>
+                    <span class="${pc}" style="font-size:11px;white-space:nowrap;">${esc(f.priority?.name)}</span>
                 </div>`;
             }).join('');
             el.innerHTML = rows;
         } catch(e) {
-            el.innerHTML = `<div class="error" style="margin:8px;">${e.message}</div>`;
+            el.innerHTML = `<div class="error" style="margin:8px;">${esc(e.message)}</div>`;
         }
     }
 
@@ -959,8 +991,8 @@
         document.getElementById('metricSections').innerHTML = '';
 
         const fixVersions = releaseMap[release] || [release];
-        const versionList = fixVersions.map(v => `"${v}"`).join(', ');
-        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${release}")`;
+        const versionList = fixVersions.map(v => `"${jqlStr(v)}"`).join(', ');
+        const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${jqlStr(release)}")`;
         const baseJql = `project = ${cfg.project} AND ${versionFilter}`;
 
         // Production bugs use ONLY affectedVersion — a bug fixed in this release but found in an older one should not count
@@ -988,12 +1020,12 @@
                     <div class="metric-title">Defect Leakage Rate</div>
                     <div class="metric-value">${leakagePct}%</div>
                     <div class="metric-sub">${totalProdBugs} production bugs out of ${totalBugs} total</div>
-                    <div class="metric-desc">Bugs found in production (label: Production_Issue) vs all bugs for RC ${release}</div>
+                    <div class="metric-desc">Bugs found in production (label: Production_Issue) vs all bugs for RC ${esc(release)}</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-title">Total Bugs</div>
                     <div class="metric-value">${totalBugs}</div>
-                    <div class="metric-sub">All bugs for RC ${release}</div>
+                    <div class="metric-sub">All bugs for RC ${esc(release)}</div>
                     <div class="metric-desc">Bugs with affectedVersion matching this release</div>
                 </div>
                 <div class="metric-card ${totalProdBugs > 0 ? 'danger' : 'success'}">
@@ -1005,7 +1037,7 @@
                 <div class="metric-card">
                     <div class="metric-title">Stories</div>
                     <div class="metric-value">${totalStories}</div>
-                    <div class="metric-sub">Story + Dev Story for RC ${release}</div>
+                    <div class="metric-sub">Story + Dev Story for RC ${esc(release)}</div>
                     <div class="metric-desc">Total stories delivered in this release</div>
                 </div>
             `;
@@ -1024,7 +1056,7 @@
                     const pct = Math.round((c / totalProdBugs) * 100);
                     const barW = Math.max(4, Math.round((c / totalProdBugs) * 300));
                     return `<div class="metric-bar-wrap">
-                        <div class="metric-bar-label">${p}</div>
+                        <div class="metric-bar-label">${esc(p)}</div>
                         <div class="metric-bar" style="width:${barW}px"></div>
                         <div class="metric-bar-pct">${c} (${pct}%)</div>
                     </div>`;
@@ -1047,7 +1079,7 @@
             document.getElementById('metricSections').innerHTML = sectionsHtml;
 
         } catch(e) {
-            document.getElementById('metricCards').innerHTML = `<div class="error">${e.message}</div>`;
+            document.getElementById('metricCards').innerHTML = `<div class="error">${esc(e.message)}</div>`;
         }
     }
 
@@ -1061,14 +1093,14 @@
             const pc = getPriorityClass(f.priority?.name);
             const assignee = f.assignee?.displayName || 'Unassigned';
             const vers = (f.fixVersions||[]).map(v=>v.name).join(', ');
-            const labels = (f.labels||[]).map(l=>`<span class="tag">${l}</span>`).join('');
+            const labels = (f.labels||[]).map(l=>`<span class="tag">${esc(l)}</span>`).join('');
             return `<tr>
-                <td><a href="${cfg.url}/browse/${i.key}" target="_blank">${i.key}</a></td>
-                <td>${f.summary||''}</td>
-                <td><span class="status-badge status-${sc}">${f.status?.name||''}</span></td>
-                <td class="${pc}">${f.priority?.name||''}</td>
-                <td>${assignee}</td>
-                <td>${vers}</td>
+                <td><a href="${esc(cfg.url)}/browse/${esc(i.key)}" target="_blank">${esc(i.key)}</a></td>
+                <td>${esc(f.summary)}</td>
+                <td><span class="status-badge status-${sc}">${esc(f.status?.name)}</span></td>
+                <td class="${pc}">${esc(f.priority?.name)}</td>
+                <td>${esc(assignee)}</td>
+                <td>${esc(vers)}</td>
                 <td>${labels}</td>
             </tr>`;
         }).join('');
