@@ -149,7 +149,7 @@
             </div>
         </div>
         <div class="config-field release-manager">
-            <label>Release Date</label>
+            <label>Latest Release Date</label>
             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                 <select id="releaseDatePicker" style="min-width:160px;"><option value="">-- Select RC --</option></select>
                 <input type="datetime-local" id="releaseDateInput" style="min-width:190px; padding:8px 12px; border:1px solid var(--border); border-radius:4px; font-size:14px;">
@@ -157,14 +157,26 @@
                 <button class="btn btn-sm btn-danger" onclick="clearReleaseDate()" title="Clear date for selected RC">✕</button>
             </div>
         </div>
-        <div class="config-field" style="flex:1; min-width:300px;">
-            <label style="display:flex; align-items:center; gap:8px;">
-                Assigned to me
-                <span id="assignedMeCount" style="font-size:11px; font-weight:700; background:#deebff; color:#0052cc; border-radius:3px; padding:1px 7px; display:none;"></span>
-                <button class="btn btn-sm" onclick="loadAssignedToMe()" style="margin-left:auto;">Refresh</button>
-            </label>
-            <div id="assignedMeResults" style="max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); font-size:12px;">
-                <div class="empty-state" style="padding:16px;">Click Refresh to load</div>
+        <div style="display:flex; flex-direction:column; gap:12px; flex:1; min-width:300px;">
+            <div class="config-field">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    Assigned to me
+                    <span id="assignedMeCount" style="font-size:11px; font-weight:700; background:#deebff; color:#0052cc; border-radius:3px; padding:1px 7px; display:none;"></span>
+                    <button class="btn btn-sm" onclick="loadAssignedToMe()" style="margin-left:auto;">Refresh</button>
+                </label>
+                <div id="assignedMeResults" style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); font-size:12px;">
+                    <div class="empty-state" style="padding:16px;">Click Refresh to load</div>
+                </div>
+            </div>
+            <div class="config-field">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    Opened by me
+                    <span id="openedMeCount" style="font-size:11px; font-weight:700; background:#deebff; color:#0052cc; border-radius:3px; padding:1px 7px; display:none;"></span>
+                    <button class="btn btn-sm" onclick="loadOpenedByMe()" style="margin-left:auto;">Refresh</button>
+                </label>
+                <div id="openedMeResults" style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--card-bg); font-size:12px;">
+                    <div class="empty-state" style="padding:16px;">Click Refresh to load</div>
+                </div>
             </div>
         </div>
     </div>
@@ -389,11 +401,10 @@
             const cfg = getConfig();
             const releaseKey = document.getElementById('releaseVersion').value;
             const releaseDate = getReleaseDateKey(cfg.project, releaseKey);
-            if (releaseDate) {
-                nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="QE Verified→Merged after ${releaseDate}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
-                // Compute async after render
-                computeNextRc(issues, releaseDate, tableId);
-            }
+            const title = releaseDate ? `Merged after ${releaseDate} + planned (not yet done)` : 'All planned/not yet done for this release';
+            nextRcCard = `<div class="summary-card next-rc" id="nextRcCard" title="${title}"><div class="number" id="nextRcCount">…</div><div class="label">Next RC</div></div>`;
+            // Compute async after render
+            computeNextRc(issues, releaseDate, tableId);
         }
 
         document.getElementById(summaryId).innerHTML =
@@ -409,11 +420,15 @@
         const versionList = fixVersions.map(v => `"${v}"`).join(', ');
         const versionFilter = `(fixVersion IN (${versionList}) OR affectedVersion IN (${versionList}) OR ${PLANNED_RELEASE_FIELD} = "${releaseKey}")`;
 
-        // Format datetime for JQL: "2026-07-25 14:30" (JQL uses yyyy-MM-dd HH:mm)
-        const jqlDate = releaseDate.replace('T', ' ');
-
-        // JQL status change clause — Jira evaluates this precisely against the changelog
-        const jql = `project = ${cfg.project} AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
+        // If a release date is set, find tickets merged after that date.
+        // If no date is set, fall back to all non-closed tickets for this release across all projects.
+        let jql;
+        if (releaseDate) {
+            const jqlDate = releaseDate.replace('T', ' ');
+            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status changed to "Merged" after "${jqlDate}" AND status != Closed`;
+        } else {
+            jql = `project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) AND ${versionFilter} AND status != Closed`;
+        }
         tabBaseJql['nextRc'] = jql;
 
         try {
@@ -842,21 +857,21 @@
         document.getElementById('releaseDateInput').value = releaseDates[key] || '';
     });
 
-    // --- Assigned to me ---
+    // --- Assigned to me / Opened by me ---
     const DAMJAN_ACCOUNT_ID = '5e4d7a1129e6d00c9706d742';
+    const MY_PROJECTS = 'SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT';
 
-    async function loadAssignedToMe() {
+    async function loadMyIssues(jql, resultsId, countId, emptyMsg) {
         const cfg = getConfig();
-        const el = document.getElementById('assignedMeResults');
+        const el = document.getElementById(resultsId);
         el.innerHTML = '<div class="loading">Loading...</div>';
-        const jql = `assignee = "${DAMJAN_ACCOUNT_ID}" AND project in (SPFAM, SPC, SPFMTMOUS, SPFSPRUS, SPFATT) ORDER BY updated DESC`;
         try {
             const d = await jiraSearchAll(jql, 100);
             const count = d.issues.length;
-            const countEl = document.getElementById('assignedMeCount');
+            const countEl = document.getElementById(countId);
             countEl.textContent = count;
             countEl.style.display = count ? 'inline' : 'none';
-            if (!count) { el.innerHTML = '<div class="empty-state" style="padding:12px;">No open tickets assigned to you.</div>'; return; }
+            if (!count) { el.innerHTML = `<div class="empty-state" style="padding:12px;">${emptyMsg}</div>`; return; }
             const rows = d.issues.map(i => {
                 const f = i.fields;
                 const sc = getStatusCategory(f.status?.name);
@@ -872,6 +887,16 @@
         } catch(e) {
             el.innerHTML = `<div class="error" style="margin:8px;">${e.message}</div>`;
         }
+    }
+
+    async function loadAssignedToMe() {
+        const jql = `assignee = "${DAMJAN_ACCOUNT_ID}" AND project in (${MY_PROJECTS}) AND status != Closed ORDER BY updated DESC`;
+        await loadMyIssues(jql, 'assignedMeResults', 'assignedMeCount', 'No open tickets assigned to you.');
+    }
+
+    async function loadOpenedByMe() {
+        const jql = `reporter = "${DAMJAN_ACCOUNT_ID}" AND project in (${MY_PROJECTS}) AND status != Closed ORDER BY updated DESC`;
+        await loadMyIssues(jql, 'openedMeResults', 'openedMeCount', 'No open tickets opened by you.');
     }
 
     // --- Project avatars ---
@@ -902,6 +927,7 @@
     loadReleaseDates();
     updateProjectAvatar();
     loadAssignedToMe();
+    loadOpenedByMe();
 
     // Reload versions when project changes
     document.getElementById('projectKey').addEventListener('change', () => {
