@@ -117,7 +117,22 @@ function sendJson(res, status, body) {
     res.end(JSON.stringify(body));
 }
 
-let credentials = loadCredentials();
+// Re-read the credentials file when it changes, so running setup-credentials.js
+// against an already-started proxy takes effect without a restart.
+let credCache = { mtimeMs: undefined, value: null };
+
+function currentCredentials() {
+    let mtimeMs = null;
+    try {
+        mtimeMs = fs.statSync(CREDENTIALS_PATH).mtimeMs;
+    } catch {
+        mtimeMs = null;
+    }
+    if (mtimeMs !== credCache.mtimeMs) {
+        credCache = { mtimeMs, value: loadCredentials() };
+    }
+    return credCache.value;
+}
 
 const server = http.createServer((req, res) => {
     // No CORS headers: the dashboard is served by this same process, so its
@@ -156,7 +171,7 @@ const server = http.createServer((req, res) => {
         }
         const target = check.target;
 
-        const auth = authHeaderFor(req.headers['authorization'], credentials);
+        const auth = authHeaderFor(req.headers['authorization'], currentCredentials());
         if (!auth) {
             sendJson(res, 401, {
                 error: 'No Jira credentials configured. Run "node setup-credentials.js", '
@@ -212,8 +227,9 @@ if (require.main === module) {
         console.log(`\n  Jira Dashboard Server running at:`);
         console.log(`  -> http://localhost:${PORT}\n`);
         console.log(`  Bound to ${HOST} only. Allowed proxy hosts: ${[...ALLOWED_HOSTS].join(', ')}`);
-        if (credentials) {
-            console.log(`  Jira credentials: ${credentials.email} (from ${credentials.source})\n`);
+        const startupCreds = currentCredentials();
+        if (startupCreds) {
+            console.log(`  Jira credentials: ${startupCreds.email} (from ${startupCreds.source})\n`);
         } else {
             console.log(`  Jira credentials: NONE — run "node setup-credentials.js" to store them,`);
             console.log(`  or enter a token in the dashboard Settings panel.\n`);
@@ -222,4 +238,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { resolveStaticPath, isAllowedTarget, isSameSiteRequest, authHeaderFor, loadCredentials, CREDENTIALS_PATH };
+module.exports = { resolveStaticPath, isAllowedTarget, isSameSiteRequest, authHeaderFor, loadCredentials, currentCredentials, CREDENTIALS_PATH };

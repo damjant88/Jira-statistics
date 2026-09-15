@@ -1,2 +1,8 @@
 @echo off
-"C:\Program Files\nodejs\node.exe" "c:\Users\dtomic\OneDrive - Smith Micro Software\Tools\Jira\jira-proxy.js"
+cd /d "%~dp0"
+"C:\Program Files\nodejs\node.exe" "%~dp0jira-proxy.js"
+if errorlevel 1 (
+    echo.
+    echo The proxy exited with an error. Press any key to close.
+    pause >nul
+)
